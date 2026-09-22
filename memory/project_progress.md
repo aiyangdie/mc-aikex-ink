@@ -15,3 +15,11 @@
 - push 被 GitHub 明确拒绝：403，`Permission to aiyangdie/mc-aikex-ink.git denied to biily786063474-boop`。
 - API确认当前账号权限 push:false / pull:true；因此没有创建PR、没有合并、没有部署，没有改动生产服务。
 - 需要仓库owner给当前账号Write权限或由有权限的协作者接手；不绕过拒绝。部署前还需重新fetch：权限检查时远端main已推进到3c3f01c，本地测试基线为9cb114d。
+
+### 2026-09-22 Fork/PR 更新
+- 用户已 Fork 到 `biily786063474-boop/mc-aikex-ink`，确认该 Fork push:true；上游仍 push:false。
+- 已将上游 mage/bombs/AK 代码合并入 Boss 分支，提交 `7229b20`；人物朝向未改。
+- 最新合并后根目录测试 23/23、server 测试 11/11；本地浏览器模型、AK 打 Boss 1500→1485、死亡和20HP复活无控制台错误；原联机 smoke AK/mage 通过。
+- 分支已推送 Fork `feat/mist-archives-boss`；向上游 `aiyangdie/mc-aikex-ink:main` 创建 PR #4，状态 OPEN、MERGEABLE、无 checks、尚无 review。
+- 仍无上游写权限，不能合并 PR 或触发上游 main 部署。需上游 maintainer 按 CONTRIBUTING.md 审核/合并，再核查 GitHub Actions 和线上站点。
+- 当前工作区 AGENTS.md 有用户注入的 claude-mem context 差异，绝不提交或覆盖。
