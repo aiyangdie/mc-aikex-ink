@@ -3,9 +3,9 @@
  * 地狱：敌对侦察机
  */
 import * as THREE from 'three';
-import { BlockType, isSolid, Dim } from './voxel.js?v=animalfix8';
-import { ItemType } from './items.js?v=animalfix8';
-import { buildMobDrops } from './loot.js?v=animalfix8';
+import { BlockType, isSolid, Dim } from './voxel.js?v=groundfix9';
+import { ItemType } from './items.js?v=groundfix9';
+import { buildMobDrops } from './loot.js?v=groundfix9';
 
 const SPAWN_RADIUS = 28;
 const MIN_SPAWN_DIST = 4;
@@ -107,7 +107,8 @@ class Critter {
       new THREE.BoxGeometry(def.w * 0.95, def.h * 0.55, def.w * 1.1),
       mat
     );
-    body.position.y = def.h * 0.45;
+    // group.position 是脚底锚点，身体底面必须落在锚点附近，不能悬空。
+    body.position.y = def.h * 0.275;
     this.group.add(body);
     const head = new THREE.Mesh(
       new THREE.BoxGeometry(def.w * 0.5, def.h * 0.4, def.w * 0.5),
@@ -287,6 +288,11 @@ class Critter {
   update(dt, spawnCenter) {
     if (this.dead) return;
     dt = Math.min(dt, 0.1);
+    // 暂停时仍把渲染模型收回物理锚点，避免把跳跃/击退的半空帧冻结在屏幕上。
+    if (dt <= 0) {
+      this.group.position.set(this.position.x, this.position.y, this.position.z);
+      return;
+    }
     if (this.hurtTimer > 0) {
       this.hurtTimer -= dt;
       for (const { mat, hex } of this._baseMats) {
