@@ -53,6 +53,11 @@ export class MistBoss {
     this.model.position.x -= (center.x - this.group.position.x) * scale;
     this.model.position.z -= (center.z - this.group.position.z) * scale;
     this.model.position.y -= (bounds.min.y - this.group.position.y) * scale;
+    // GLB 的原点和视觉脚底不完全一致，缩放后再做一次世界坐标对齐。
+    this.group.updateMatrixWorld(true);
+    const grounded = new THREE.Box3().setFromObject(this.model);
+    this.model.position.y += this.group.position.y - grounded.min.y;
+    this.group.updateMatrixWorld(true);
     const bone = name => {
       let result;
       this.model.traverse(o => { if (o.isBone && o.name.replace(/[^a-zA-Z0-9]/g,'') === name) result = o; });
