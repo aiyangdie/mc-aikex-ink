@@ -4,24 +4,24 @@
  */
 
 import * as THREE from 'three';
-import { Combat } from './combat.js?v=mistboss5';
+import { Combat } from './combat.js?v=playerstats6';
 import {
   World, Chunk, BlockType, BlockNames, isSolid, Dim,
   CHUNK_SIZE, CHUNK_HEIGHT, RENDER_DISTANCE, getBlockColor, getBreakDrop,
   isMobileDevice, getRenderDistance,
-} from './voxel.js?v=mistboss5';
-import { AnimalManager } from './animals.js?v=mistboss5';
-import { SaveManager } from './save.js?v=mistboss5';
-import { NetClient, RemotePlayers } from './net.js?v=mistboss5';
-import { Inventory } from './inventory.js?v=mistboss5';
-import { isFood, isItem, getItemName, getItemColor, getFoodHeal, ItemType } from './items.js?v=mistboss5';
-import { BombManager, isBomb } from './bombs.js?v=mistboss5';
-import { tryLightPortal, standingInPortal, spawnReturnPortal } from './portals.js?v=mistboss5';
-import { EnderDragon } from './dragon.js?v=mistboss5';
-import { AdminPanel } from './admin-panel.js?v=mistboss5';
-import { buildStructure } from './structures.js?v=mistboss5';
-import { summarizeDrops, buildMobDrops } from './loot.js?v=mistboss5';
-import { apiUrl } from './config.js?v=mistboss5';
+} from './voxel.js?v=playerstats6';
+import { AnimalManager } from './animals.js?v=playerstats6';
+import { SaveManager } from './save.js?v=playerstats6';
+import { NetClient, RemotePlayers } from './net.js?v=playerstats6';
+import { Inventory } from './inventory.js?v=playerstats6';
+import { isFood, isItem, getItemName, getItemColor, getFoodHeal, ItemType } from './items.js?v=playerstats6';
+import { BombManager, isBomb } from './bombs.js?v=playerstats6';
+import { tryLightPortal, standingInPortal, spawnReturnPortal } from './portals.js?v=playerstats6';
+import { EnderDragon } from './dragon.js?v=playerstats6';
+import { AdminPanel } from './admin-panel.js?v=playerstats6';
+import { buildStructure } from './structures.js?v=playerstats6';
+import { summarizeDrops, buildMobDrops } from './loot.js?v=playerstats6';
+import { apiUrl } from './config.js?v=playerstats6';
 import { MistBoss } from './mist-boss.js';
 import { findStandY } from './boss-navigation.js';
 
@@ -768,6 +768,8 @@ export class Game {
     this._saveData = null;       // 启动时读到的存档
     this._dirtySinceSave = false;
     this._autosaveTimer = null;
+    this.profile = { name: '玩家' };
+    this.stats = { defeats: 0, deaths: 0, bossDefeats: 0 };
 
     // 联机
     this.net = null;
@@ -816,13 +818,19 @@ export class Game {
     this.adminPanel.tryAutoLogin();
     this._playerName = () => {
       const el = document.getElementById('playerNameInput');
-      return (el?.value || '玩家').trim().slice(0, 12) || '玩家';
+      const name = (el?.value || this.profile.name || '玩家').trim().slice(0, 12) || '玩家';
+      this.profile.name = name;
+      return name;
     };
+    const nameInput = document.getElementById('playerNameInput');
+    if (nameInput) nameInput.value = this.profile.name;
 
     // 读档：先灌差分，再生成区块（背景预览即是存档世界）
     this._saveData = SaveManager.load();
     if (this._saveData) {
       this._mistBossState = this._saveData.mistBoss || null;
+      this.profile = { ...this.profile, ...(this._saveData.profile || {}) };
+      this.stats = { ...this.stats, ...(this._saveData.stats || {}) };
       this.world.edits = SaveManager.arrayToEdits(this._saveData.edits);
       if (Array.isArray(this._saveData.inventory)) {
         this.inventory.fromJSON(this._saveData.inventory);
@@ -1513,6 +1521,7 @@ export class Game {
 
   /** 本地击杀收尸 + 发奖 */
   _onLocalMobKill(mob, drops) {
+    this._recordDefeat('mob');
     const list = drops?.length ? drops : buildMobDrops(mob.kind);
     this._grantLoot(list, { prey: mob.def?.name || mob.kind || '' });
     mob.dispose?.();
@@ -1560,6 +1569,7 @@ export class Game {
       this._mistBossState = robot.toJSON();
       this._dirtySinceSave = true;
       if (robot.dead) {
+        this._recordDefeat('boss');
         robot.dispose();
         this._mistBoss = null;
         this._showSaveToast('迷雾档案 Boss 已击败！');
@@ -1592,6 +1602,7 @@ export class Game {
   _onDragonDefeated() {
     if (this._dragonKilled) return;
     this._dragonKilled = true;
+    this._recordDefeat('boss');
     this._showSaveToast('⚔ 末影龙已被击败！');
     const drops = [];
     for (let i = 0; i < 8; i++) drops.push(ItemType.DRAGON_MEAT);
@@ -1828,6 +1839,8 @@ export class Game {
 
   _showDeathScreen() {
     if (this._dead) return;
+    this.stats ||= { defeats: 0, deaths: 0, bossDefeats: 0 };
+    this.stats.deaths = (this.stats.deaths || 0) + 1;
     this._dead = true;
     this._fallbackActive = false;
     this._lockPending = false;
@@ -1966,10 +1979,12 @@ export class Game {
     el.innerHTML =
       '<span class="hp-label">❤</span><progress id="hpBar" max="20" value="20"></progress>' +
       '<span id="hpHearts"></span>' +
-      '<span id="coinHud" class="coin-hud">金 0</span>';
+      '<span id="coinHud" class="coin-hud">金 0</span>' +
+      '<span id="defeatHud" class="defeat-hud">击败 0</span>';
     document.body.appendChild(el);
     this._updateHpHud();
     this._updateCoinHud();
+    this._updateDefeatHud();
   }
 
   _updateHpHud() {
@@ -1988,6 +2003,19 @@ export class Game {
     if (!el || !this.inventory) return;
     const n = this.inventory.countOf?.(ItemType.COIN) || 0;
     el.textContent = `金 ${n}`;
+  }
+
+  _updateDefeatHud() {
+    const el = document.getElementById('defeatHud');
+    if (el) el.textContent = `击败 ${this.stats?.defeats || 0}`;
+  }
+
+  _recordDefeat(kind = 'mob') {
+    this.stats.defeats = (this.stats.defeats || 0) + 1;
+    if (kind === 'boss') this.stats.bossDefeats = (this.stats.bossDefeats || 0) + 1;
+    this._updateDefeatHud();
+    this._dirtySinceSave = true;
+    this._showSaveToast(`⚔ 击败 ${kind === 'boss' ? 'Boss' : '目标'} · 总计 ${this.stats.defeats}`);
   }
 
   /** 存档 UI：开始屏 / 暂停屏按钮 */
@@ -2129,6 +2157,8 @@ export class Game {
     const pos = this.player.position;
     const r = SaveManager.save({
       mistBoss: this._online ? this._mistBossState : (this._mistBoss?.toJSON() || this._mistBossState),
+      profile: this.profile,
+      stats: this.stats,
       seed: this.world.seed,
       selectedSlot: this.selectedSlot,
       hp: this.player.hp,
