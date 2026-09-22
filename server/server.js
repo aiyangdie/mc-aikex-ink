@@ -20,6 +20,7 @@ const { URL } = require('url');
 async function main() {
 const { RoomBoss, CollisionWorld } = await import('./room-boss.mjs');
 const { getFoodHeal } = await import('../js/items.js');
+const { buildMobDrops } = await import('../js/loot.js');
 const PORT = Number(process.env.PORT || 3040);
 const HOST = process.env.HOST || '127.0.0.1';
 const OWNER_KEY = process.env.MC_OWNER_KEY || 'aikex-mc-2026';
@@ -806,8 +807,14 @@ wss.on('connection', (ws) => {
       const result = room.hitMob(String(msg.id || ''), msg.dmg | 0 || 3, peer.id);
       if (!result) return;
       if (result.die) {
-        const DROP = { pig:[100,100], cow:[101,101], chicken:[102], duck:[106], deer:[103,103], horse:[104,104], donkey:[105,105], scout:[12,12], heavy:[10,3] };
-        room.broadcast({ t: 'mob_die', id: result.mob.id, by: peer.id, drops: DROP[result.mob.kind] || [100] });
+        const drops = buildMobDrops(result.mob.kind);
+        room.broadcast({
+          t: 'mob_die',
+          id: result.mob.id,
+          by: peer.id,
+          kind: result.mob.kind,
+          drops,
+        });
       } else {
         room.broadcast({ t: 'mob', ...result.mob });
       }

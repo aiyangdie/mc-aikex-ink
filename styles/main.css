@@ -137,6 +137,13 @@ html, body {
   backdrop-filter: blur(4px);
   pointer-events: none;
 }
+#hpHud .coin-hud {
+  margin-left: 6px;
+  padding-left: 10px;
+  border-left: 1px solid rgba(255,255,255,.25);
+  color: #ffe082;
+  font-variant-numeric: tabular-nums;
+}
 
 #dimHud {
   position: fixed;

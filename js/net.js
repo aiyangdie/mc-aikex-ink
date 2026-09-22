@@ -1,7 +1,7 @@
 /**
  * 联机客户端：房间码建房/加入，同步方块与玩家位置
  */
-import { apiUrl, wsUrl } from './config.js?v=mistboss4';
+import { apiUrl, wsUrl } from './config.js?v=mistboss5';
 
 export class NetClient {
   constructor() {

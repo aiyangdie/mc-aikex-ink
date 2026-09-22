@@ -1,7 +1,7 @@
 import * as THREE from 'three';
-import { Mage } from './mage.js?v=mistboss4';
-import { isSolid } from './voxel.js?v=mistboss4';
-import { CombatPhysics, pickRandomSpawn } from './physics.js?v=mistboss4';
+import { Mage } from './mage.js?v=mistboss5';
+import { isSolid } from './voxel.js?v=mistboss5';
+import { CombatPhysics, pickRandomSpawn } from './physics.js?v=mistboss5';
 
 /**
  * AK：联机打玩家；单机/联机本地弹道可打动物（PvE）
@@ -250,10 +250,8 @@ export class Combat {
     this._flashHit(!!result?.dead);
     if (target === g._dragon && result?.dead) g._onDragonDefeated?.();
     else if (result?.dead && result.drops) {
-      for (const d of result.drops) g.inventory.add(d, 1);
-      g._updateHotbar();
-      g._showSaveToast?.(`猎到 ${target.def?.name || target.kind || '猎物'}`);
-    } else if (target.hp != null) {
+      g._onLocalMobKill?.(target, result.drops);
+    } else if (target.hp != null && !target.dead) {
       const name = target.def?.name || target.kind || '目标';
       g._showSaveToast?.(`${name} ${Math.max(0, target.hp)} HP`);
     }

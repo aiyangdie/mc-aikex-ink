@@ -3,7 +3,7 @@
  * 炸毁可破坏方块、伤害生物与玩家、带击退
  */
 import * as THREE from 'three';
-import { BlockType, isSolid } from './voxel.js?v=mistboss4';
+import { BlockType, isSolid } from './voxel.js?v=mistboss5';
 
 const FUSE = 2.4;
 const RADIUS = 3.6;
@@ -183,7 +183,7 @@ export class BombManager {
         }
         const result = mob.takeDamage?.(dmg, dir, BLAST_KNOCK * falloff);
         if (result?.dead && result.drops) {
-          for (const drop of result.drops) g.inventory.add(drop, 1);
+          g._onLocalMobKill?.(mob, result.drops);
         }
       }
       g._updateHotbar?.();

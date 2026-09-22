@@ -4,7 +4,7 @@
  */
 
 import * as THREE from 'three';
-import { SimplexNoise } from './noise.js?v=mistboss4';
+import { SimplexNoise } from './noise.js?v=mistboss5';
 
 /* ============================================
    常量与配置

@@ -3,8 +3,9 @@
  * 地狱：敌对侦察机
  */
 import * as THREE from 'three';
-import { BlockType, isSolid, Dim } from './voxel.js?v=mistboss4';
-import { ItemType } from './items.js?v=mistboss4';
+import { BlockType, isSolid, Dim } from './voxel.js?v=mistboss5';
+import { ItemType } from './items.js?v=mistboss5';
+import { buildMobDrops } from './loot.js?v=mistboss5';
 
 const SPAWN_RADIUS = 28;
 const MIN_SPAWN_DIST = 4;
@@ -185,9 +186,7 @@ class Critter {
       this.dead = true;
       this._syncHpLabel();
       if (this.label) this.label.style.display = 'none';
-      const drops = [];
-      for (let i = 0; i < (this.def.dropN || 1); i++) drops.push(this.def.drop);
-      return { dead: true, drops };
+      return { dead: true, drops: buildMobDrops(this.kind) };
     }
     return { dead: false, drops: [] };
   }

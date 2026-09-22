@@ -4,23 +4,24 @@
  */
 
 import * as THREE from 'three';
-import { Combat } from './combat.js?v=mistboss4';
+import { Combat } from './combat.js?v=mistboss5';
 import {
   World, Chunk, BlockType, BlockNames, isSolid, Dim,
   CHUNK_SIZE, CHUNK_HEIGHT, RENDER_DISTANCE, getBlockColor, getBreakDrop,
   isMobileDevice, getRenderDistance,
-} from './voxel.js?v=mistboss4';
-import { AnimalManager } from './animals.js?v=mistboss4';
-import { SaveManager } from './save.js?v=mistboss4';
-import { NetClient, RemotePlayers } from './net.js?v=mistboss4';
-import { Inventory } from './inventory.js?v=mistboss4';
-import { isFood, isItem, getItemName, getItemColor, getFoodHeal, ItemType } from './items.js?v=mistboss4';
-import { BombManager, isBomb } from './bombs.js?v=mistboss4';
-import { tryLightPortal, standingInPortal, spawnReturnPortal } from './portals.js?v=mistboss4';
-import { EnderDragon } from './dragon.js?v=mistboss4';
-import { AdminPanel } from './admin-panel.js?v=mistboss4';
-import { buildStructure } from './structures.js?v=mistboss4';
-import { apiUrl } from './config.js';
+} from './voxel.js?v=mistboss5';
+import { AnimalManager } from './animals.js?v=mistboss5';
+import { SaveManager } from './save.js?v=mistboss5';
+import { NetClient, RemotePlayers } from './net.js?v=mistboss5';
+import { Inventory } from './inventory.js?v=mistboss5';
+import { isFood, isItem, getItemName, getItemColor, getFoodHeal, ItemType } from './items.js?v=mistboss5';
+import { BombManager, isBomb } from './bombs.js?v=mistboss5';
+import { tryLightPortal, standingInPortal, spawnReturnPortal } from './portals.js?v=mistboss5';
+import { EnderDragon } from './dragon.js?v=mistboss5';
+import { AdminPanel } from './admin-panel.js?v=mistboss5';
+import { buildStructure } from './structures.js?v=mistboss5';
+import { summarizeDrops, buildMobDrops } from './loot.js?v=mistboss5';
+import { apiUrl } from './config.js?v=mistboss5';
 import { MistBoss } from './mist-boss.js';
 import { findStandY } from './boss-navigation.js';
 
@@ -1449,19 +1450,75 @@ export class Game {
   _eatSelected() {
     if (this.player.hp <= 0) return;
     const type = this.inventory.selectedType(this.selectedSlot);
-    if (!isFood(type)) return;
+    if (!isFood(type)) {
+      // 未选中肉时：自动切到第一格食物再提示
+      const foodSlot = this.inventory.findFoodSlot?.() ?? -1;
+      if (foodSlot >= 0) {
+        this.selectedSlot = foodSlot;
+        this._updateHotbar();
+        this._showSaveToast(`已选中${getItemName(this.inventory.selectedType(foodSlot))} · 再按 F 吃`);
+      } else {
+        this._showSaveToast('没有肉可吃 · 先打动物掉落');
+      }
+      return;
+    }
     if (this.player.hp >= this.player.maxHp) {
       this._showSaveToast('已经吃饱了');
       return;
     }
     if (!this.inventory.consume(this.selectedSlot, 1)) return;
     const heal = getFoodHeal(type);
-    if (this._online) this.net._send({t:'eat',item:type});
-    else this.player.hp = Math.min(this.player.maxHp, this.player.hp + heal);
+    // 联机也先本地回血，服务端 vitals 再校准
+    this.player.hp = Math.min(this.player.maxHp, this.player.hp + heal);
+    if (this._online) this.net._send({ t: 'eat', item: type });
     this._updateHotbar();
     this._updateHpHud();
     this._showSaveToast(`吃了${getItemName(type)} +${heal}❤`);
     this._dirtySinceSave = true;
+  }
+
+  /** 切到持有某物品的格子 */
+  _selectItemType(type) {
+    const slot = this.inventory.findSlot?.(type) ?? -1;
+    if (slot < 0) return false;
+    this.selectedSlot = slot;
+    this._updateHotbar();
+    return true;
+  }
+
+  /**
+   * 统一发奖：进背包、自动选肉、金币 HUD、命名提示
+   * @returns {{ got: number[], foodType: number, coins: number }}
+   */
+  _grantLoot(drops, { prey = '' } = {}) {
+    const received = [];
+    let rejected = 0;
+    for (const d of drops || []) {
+      const n = this.inventory.add(d, 1);
+      if (n > 0) received.push(d);
+      else rejected++;
+    }
+    const sum = summarizeDrops(received);
+    this._updateHotbar();
+    this._updateCoinHud();
+    if (sum.foodType) this._selectItemType(sum.foodType);
+    const head = prey ? `猎到${prey}！` : '击杀！';
+    let tip = `${head}${sum.label}`;
+    if (sum.foodType) tip += ' · 按 F 吃肉';
+    if (rejected) tip += ' · 背包满了';
+    this._showSaveToast(tip);
+    this._dirtySinceSave = true;
+    return sum;
+  }
+
+  /** 本地击杀收尸 + 发奖 */
+  _onLocalMobKill(mob, drops) {
+    const list = drops?.length ? drops : buildMobDrops(mob.kind);
+    this._grantLoot(list, { prey: mob.def?.name || mob.kind || '' });
+    mob.dispose?.();
+    if (this.animalManager) {
+      this.animalManager.robots = this.animalManager.robots.filter((r) => r !== mob);
+    }
   }
 
   /** 1 木头 → 4 木板 */
@@ -1526,12 +1583,7 @@ export class Game {
     const result = robot.takeDamage(3);
     if (!result) return;
     if (result.dead) {
-      for (const d of result.drops) this.inventory.add(d, 1);
-      this._updateHotbar();
-      this._showSaveToast(`击杀${robot.def?.name || ''}！获得肉/掉落`);
-      robot.dispose();
-      this.animalManager.robots = this.animalManager.robots.filter((r) => r !== robot);
-      this._dirtySinceSave = true;
+      this._onLocalMobKill(robot, result.drops);
     } else {
       this._showSaveToast(`命中 ${robot.hp}/${robot.maxHp}`);
     }
@@ -1541,7 +1593,10 @@ export class Game {
     if (this._dragonKilled) return;
     this._dragonKilled = true;
     this._showSaveToast('⚔ 末影龙已被击败！');
-    for (let i = 0; i < 8; i++) this.inventory.add(107, 1); // DRAGON_MEAT
+    const drops = [];
+    for (let i = 0; i < 8; i++) drops.push(ItemType.DRAGON_MEAT);
+    for (let i = 0; i < 12; i++) drops.push(ItemType.COIN);
+    this._grantLoot(drops, { prey: '末影龙' });
     this.inventory.add(BlockType.OBSIDIAN, 8);
     this.inventory.add(BlockType.END_STONE, 16);
     this._updateHotbar();
@@ -1908,9 +1963,13 @@ export class Game {
     const el = document.createElement('div');
     el.id = 'hpHud';
     el.style.display = 'none';
-    el.innerHTML = '<span class="hp-label">❤</span><progress id="hpBar" max="20" value="20"></progress><span id="hpHearts"></span>';
+    el.innerHTML =
+      '<span class="hp-label">❤</span><progress id="hpBar" max="20" value="20"></progress>' +
+      '<span id="hpHearts"></span>' +
+      '<span id="coinHud" class="coin-hud">金 0</span>';
     document.body.appendChild(el);
     this._updateHpHud();
+    this._updateCoinHud();
   }
 
   _updateHpHud() {
@@ -1921,6 +1980,14 @@ export class Game {
     if (bar) bar.value = hp;
     hearts.textContent = `${hp} / ${this.player.maxHp}`;
     hearts.style.color = hp <= 4 ? '#ff5252' : '#fff';
+    this._updateCoinHud();
+  }
+
+  _updateCoinHud() {
+    const el = document.getElementById('coinHud');
+    if (!el || !this.inventory) return;
+    const n = this.inventory.countOf?.(ItemType.COIN) || 0;
+    el.textContent = `金 ${n}`;
   }
 
   /** 存档 UI：开始屏 / 暂停屏按钮 */
@@ -2175,9 +2242,7 @@ export class Game {
       if (!this.animalManager) return;
       this.animalManager.removeById(msg.id);
       if (msg.by === this.net.id && Array.isArray(msg.drops)) {
-        for (const d of msg.drops) this.inventory.add(d, 1);
-        this._updateHotbar();
-        this._showSaveToast('击杀！获得掉落物');
+        this._grantLoot(msg.drops, { prey: msg.kind || '' });
       }
     });
     this.net.on('admin_spawn', (msg) => {

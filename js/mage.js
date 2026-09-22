@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { isSolid } from './voxel.js?v=mistboss4';
+import { isSolid } from './voxel.js?v=mistboss5';
 
 const BLINK_RANGE = 7.5;
 const BLINK_CD = 3200;
@@ -269,8 +269,7 @@ export class Mage {
       if (mob.position.y > y + 2 || mob.position.y + 1.75 < y) continue;
       const result = mob.takeDamage?.(amount);
       if (result?.dead && result.drops) {
-        for (const d of result.drops) g.inventory.add(d, 1);
-        g._updateHotbar?.();
+        g._onLocalMobKill?.(mob, result.drops);
       }
     }
     if (g._dragon && !g._dragon.dead) {
