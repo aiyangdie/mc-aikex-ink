@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { isSolid } from './voxel.js?v=lobby17';
+import { isSolid } from './voxel.js?v=mistboss4';
 
 const BLINK_RANGE = 7.5;
 const BLINK_CD = 3200;
@@ -28,7 +28,7 @@ export class Mage {
     const now = Date.now();
     if (now < this.nextCast || !g._controlsActive() || g.player.hp <= 0) return;
     if (g.combat?.mode !== 'mage') return;
-    this.nextCast = now + 950;
+    this.nextCast = now + 900;
     const origin = g.camera.position.clone();
     const dir = g.camera.getWorldDirection(new THREE.Vector3());
     let end = origin.clone().addScaledVector(dir, 40);
@@ -112,9 +112,19 @@ export class Mage {
 
     this.nextBlink = now + BLINK_CD;
     this._ghostFx(origin);
-    if (g._online && g.net?.room) g.net._send({ t: 'blink', to: [best.x, best.y, best.z] });
-    else this.teleport([best.x, best.y, best.z]);
+    if (g._online && g.net?.room) {
+      // 乐观 CD；服务器拒绝时 blink_fail 回滚
+      g.net._send({ t: 'blink', to: [best.x, best.y, best.z] });
+    } else {
+      this.teleport([best.x, best.y, best.z]);
+    }
     return true;
+  }
+
+  /** 联机闪现被拒：回滚冷却 */
+  onBlinkFail(msg) {
+    this.nextBlink = msg?.nextBlink || 0;
+    this.game._showSaveToast?.('闪现失败（冷却或受阻）');
   }
 
   _ghostFx(from) {
@@ -229,15 +239,43 @@ export class Mage {
             position: msg.ground,
             dimension: msg.dimension,
             expires: msg.impact + 5000,
+            solo: true,
+            nextDamage: now,
+            _burstDone: false,
           });
         }
       } else if (now >= msg.expires) {
         this.remove(key);
       } else {
+        if (msg.solo) this._soloBurn(msg, now);
         mesh.children.forEach((o, i) => {
           if (i) o.scale.y = 0.8 + Math.sin(now * 0.012 + i) * 0.3;
         });
       }
+    }
+  }
+
+  /** 单机火球地面灼烧：对齐服务端半径/跳伤（不伤自己） */
+  _soloBurn(msg, now) {
+    if (!msg.position || now < (msg.nextDamage || 0)) return;
+    const amount = msg._burstDone ? 2 : 6;
+    msg._burstDone = true;
+    msg.nextDamage = now + 500;
+    const [x, y, z] = msg.position;
+    const g = this.game;
+    for (const mob of g.animalManager?.robots || []) {
+      if (mob.dead) continue;
+      if (Math.hypot(mob.position.x - x, mob.position.z - z) > 2.5) continue;
+      if (mob.position.y > y + 2 || mob.position.y + 1.75 < y) continue;
+      const result = mob.takeDamage?.(amount);
+      if (result?.dead && result.drops) {
+        for (const d of result.drops) g.inventory.add(d, 1);
+        g._updateHotbar?.();
+      }
+    }
+    if (g._dragon && !g._dragon.dead) {
+      const d = g._dragon.position;
+      if (Math.hypot(d.x - x, d.z - z) <= 2.5) g._dragon.takeDamage?.(amount);
     }
   }
 

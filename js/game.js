@@ -4,24 +4,22 @@
  */
 
 import * as THREE from 'three';
-import { Combat } from './combat.js?v=mistboss3';
-
+import { Combat } from './combat.js?v=mistboss4';
 import {
   World, Chunk, BlockType, BlockNames, isSolid, Dim,
   CHUNK_SIZE, CHUNK_HEIGHT, RENDER_DISTANCE, getBlockColor, getBreakDrop,
   isMobileDevice, getRenderDistance,
-} from './voxel.js?v=mistboss3';
-import { AnimalManager } from './animals.js?v=mistboss3';
-import { SaveManager } from './save.js?v=mistboss3';
-import { NetClient, RemotePlayers } from './net.js?v=mistboss3';
-import { Inventory } from './inventory.js?v=mistboss3';
-import { isFood, isItem, getItemName, getItemColor, getFoodHeal, ItemType } from './items.js?v=mistboss3';
-import { BombManager, isBomb } from './bombs.js?v=mistboss3';
-import { tryLightPortal, standingInPortal, spawnReturnPortal } from './portals.js?v=mistboss3';
-import { EnderDragon } from './dragon.js?v=mistboss3';
-import { AdminPanel } from './admin-panel.js?v=mistboss3';
-import { buildStructure } from './structures.js?v=mistboss3';
-
+} from './voxel.js?v=mistboss4';
+import { AnimalManager } from './animals.js?v=mistboss4';
+import { SaveManager } from './save.js?v=mistboss4';
+import { NetClient, RemotePlayers } from './net.js?v=mistboss4';
+import { Inventory } from './inventory.js?v=mistboss4';
+import { isFood, isItem, getItemName, getItemColor, getFoodHeal, ItemType } from './items.js?v=mistboss4';
+import { BombManager, isBomb } from './bombs.js?v=mistboss4';
+import { tryLightPortal, standingInPortal, spawnReturnPortal } from './portals.js?v=mistboss4';
+import { EnderDragon } from './dragon.js?v=mistboss4';
+import { AdminPanel } from './admin-panel.js?v=mistboss4';
+import { buildStructure } from './structures.js?v=mistboss4';
 import { apiUrl } from './config.js';
 import { MistBoss } from './mist-boss.js';
 import { findStandY } from './boss-navigation.js';
@@ -2122,7 +2120,7 @@ export class Game {
 
     this.net.on('fireball', msg => this.combat?.mage.receive(msg));
     this.net.on('fire', msg => this.combat?.mage.receive(msg));
-
+    this.net.on('blink_fail', msg => this.combat?.mage.onBlinkFail?.(msg));
     this.net.on('block', (msg) => {
       if (msg.by === this.net.id) return;
       this._netApplying = true;

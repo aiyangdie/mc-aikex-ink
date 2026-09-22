@@ -1,8 +1,7 @@
 import * as THREE from 'three';
-import { Mage } from './mage.js?v=mistboss3';
-import { isSolid } from './voxel.js?v=mistboss3';
-import { CombatPhysics, pickRandomSpawn } from './physics.js?v=mistboss3';
-
+import { Mage } from './mage.js?v=mistboss4';
+import { isSolid } from './voxel.js?v=mistboss4';
+import { CombatPhysics, pickRandomSpawn } from './physics.js?v=mistboss4';
 
 /**
  * AK：联机打玩家；单机/联机本地弹道可打动物（PvE）
@@ -145,7 +144,10 @@ export class Combat {
       g.player.keys = {};
       document.body.classList.remove('combat-armed');
     }
-    if (msg.teleport) this.mage.teleport([msg.x, msg.y, msg.z]);
+    if (msg.teleport) {
+      this.mage.teleport([msg.x, msg.y, msg.z]);
+      if (msg.nextBlink) this.mage.nextBlink = msg.nextBlink;
+    }
     if (msg.respawn) {
       document.body.classList.toggle('combat-armed', this.armed);
       const reset = () => {
@@ -176,7 +178,7 @@ export class Combat {
     if (!this.armed || !g.isRunning || g.player.hp <= 0 || now < this.nextShot) return;
     if (this.deadUntil && Date.now() < this.deadUntil) return;
     if (this.mode === 'mage') { this.mage.cast(); return; }
-    this.nextShot = now + 130;
+    this.nextShot = now + 120;
 
     const p = g.player;
     const spread = 0.008 + this._spread * 0.018;
@@ -236,6 +238,13 @@ export class Combat {
     if (target === g._mistBoss) {
       if (!g._online) g._attackMob(target); // online shot damage is server owned
       this._flashHit(target.dead); return;
+    }
+    // 联机生物走服务器权威，避免本地扣血后被 mobs 广播盖回
+    if (g._online && g.net?.room && target._netDriven && target.id) {
+      g.net.sendHit(target.id, damage);
+      target.hurtTimer = 0.35;
+      this._flashHit(false);
+      return;
     }
     const result = target.takeDamage?.(damage, dir, 8);
     this._flashHit(!!result?.dead);

@@ -23,6 +23,9 @@ const { getFoodHeal } = await import('../js/items.js');
 const PORT = Number(process.env.PORT || 3040);
 const HOST = process.env.HOST || '127.0.0.1';
 const OWNER_KEY = process.env.MC_OWNER_KEY || 'aikex-mc-2026';
+if (!process.env.MC_OWNER_KEY) {
+  console.warn('[mc] WARN: MC_OWNER_KEY unset — using insecure default. Set it in ecosystem.config.cjs');
+}
 const SEED = 12345;
 const MAX_PLAYERS = 8;
 const MAX_ROOMS = 64;
@@ -443,13 +446,12 @@ function genToken() {
   return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
 }
 
-/** @returns {'owner'|'admin'|null} */
-function resolveRole(key, name) {
+/** @returns {'owner'|'admin'|null} — 必须凭密钥/token，禁止仅凭昵称提权 */
+function resolveRole(key, _name) {
   if (key && key === OWNER_KEY) return 'owner';
+  if (!key) return null;
   const data = loadAdmins();
-  const hit = (data.admins || []).find((a) =>
-    (key && a.token === key) || (name && a.name === name)
-  );
+  const hit = (data.admins || []).find((a) => a.token === key);
   return hit ? 'admin' : null;
 }
 
@@ -546,7 +548,7 @@ wss.on('connection', (ws) => {
       ws._adminKey = String(msg.key || '');
       let token;
       if (role === 'admin') {
-        const hit = (loadAdmins().admins || []).find((a) => a.token === msg.key || a.name === msg.name);
+        const hit = (loadAdmins().admins || []).find((a) => a.token === msg.key);
         token = hit?.token;
       }
       adminLog(`auth OK role=${role} name=${msg.name || '-'}`);
@@ -749,7 +751,14 @@ wss.on('connection', (ws) => {
     }
     if (msg.t === 'blink') {
       if (room.spells.blink(peer, msg, Date.now())) {
-        room.broadcast({ t: 'combat', ...combat.state(peer), teleport: true });
+        room.broadcast({
+          t: 'combat',
+          ...combat.state(peer),
+          teleport: true,
+          nextBlink: peer.nextBlink || 0,
+        });
+      } else {
+        send(ws, { t: 'blink_fail', nextBlink: peer.nextBlink || 0 });
       }
       return;
     }

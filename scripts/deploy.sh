@@ -19,6 +19,9 @@ if [[ ! -f ecosystem.config.cjs ]]; then
   cp ecosystem.config.cjs.example ecosystem.config.cjs
   echo "[deploy] WARN: created ecosystem.config.cjs from example — set MC_OWNER_KEY"
 fi
+if grep -q "change-me-owner-key\|aikex-mc-2026" ecosystem.config.cjs 2>/dev/null; then
+  echo "[deploy] WARN: MC_OWNER_KEY still looks like a default — rotate before public use"
+fi
 npm install --omit=dev
 mkdir -p data
 [[ -f data/admins.json ]] || cp data/admins.json.example data/admins.json 2>/dev/null || echo '{"version":1,"admins":[]}' > data/admins.json

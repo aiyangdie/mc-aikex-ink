@@ -2,7 +2,7 @@
  * 管理面板：传送 / 给物 / 刷怪 / 飞行 / 授权 / 自定义目录
  * 打开：按 `（反引号）
  */
-import { apiUrl } from './config.js';
+import { apiUrl } from './config.js?v=mistboss4';
 
 const AUTH_KEY = 'voxel-admin-key';
 const AUTH_TOKEN = 'voxel-admin-token';
@@ -218,23 +218,33 @@ export class AdminPanel {
     }
     try { localStorage.setItem(AUTH_KEY, key); } catch { /* */ }
 
-    // 单机：先本地视为 owner，联机再向服务器确认
-    let role = 'owner';
+    // 一律向服务器鉴权；失败则拒绝（不再默认 owner）
     const net = this.game.net;
-    if (net) {
-      try {
-        await net.connect();
-        const res = await net.adminAuth(key, this.game._playerName?.() || '');
-        role = res.role || 'owner';
-        if (res.token) {
-          try { localStorage.setItem(AUTH_TOKEN, res.token); } catch { /* */ }
-        }
-        this.refreshOpList(res.admins);
-      } catch (err) {
-        // 联机失败仍允许单机管理（仅本地）
-        console.warn('[admin] auth remote fail, local owner', err);
-        role = 'owner';
+    if (!net) {
+      this.game._showSaveToast?.('网络模块不可用');
+      return;
+    }
+    let role = null;
+    try {
+      await net.connect();
+      const res = await net.adminAuth(key, this.game._playerName?.() || '');
+      role = res.role || null;
+      if (!role) {
+        this.role = null;
+        this._setAuthedUI();
+        this.game._showSaveToast?.('密钥无效');
+        return;
       }
+      if (res.token) {
+        try { localStorage.setItem(AUTH_TOKEN, res.token); } catch { /* */ }
+      }
+      this.refreshOpList(res.admins);
+    } catch (err) {
+      console.warn('[admin] auth fail', err);
+      this.role = null;
+      this._setAuthedUI();
+      this.game._showSaveToast?.('鉴权失败，请检查密钥与网络');
+      return;
     }
     this.role = role;
     this._setAuthedUI();
