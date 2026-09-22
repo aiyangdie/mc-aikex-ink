@@ -11,6 +11,7 @@ export const ItemType = {
   DUCK: 106,       // 鸭肉
   DRAGON_MEAT: 107,// 龙肉
   BOMB: 108,       // 炸弹 · 炸房子
+  COIN: 109,       // 金币 · 猎杀奖励
 };
 
 export const ItemNames = {
@@ -23,6 +24,7 @@ export const ItemNames = {
   [ItemType.DUCK]: '鸭肉',
   [ItemType.DRAGON_MEAT]: '龙肉',
   [ItemType.BOMB]: '炸弹',
+  [ItemType.COIN]: '金币',
 };
 
 export const ItemColors = {
@@ -35,6 +37,7 @@ export const ItemColors = {
   [ItemType.DUCK]: '#d4a574',
   [ItemType.DRAGON_MEAT]: '#9c27b0',
   [ItemType.BOMB]: '#c62828',
+  [ItemType.COIN]: '#ffd54f',
 };
 
 /** 食用回血量 */

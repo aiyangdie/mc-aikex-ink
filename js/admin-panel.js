@@ -2,7 +2,7 @@
  * 管理面板：传送 / 给物 / 刷怪 / 飞行 / 授权 / 自定义目录
  * 打开：按 `（反引号）
  */
-import { apiUrl } from './config.js';
+import { apiUrl } from './config.js?v=groundfix9';
 
 const AUTH_KEY = 'voxel-admin-key';
 const AUTH_TOKEN = 'voxel-admin-token';
@@ -23,7 +23,7 @@ export class AdminPanel {
   }
 
   get authed() {
-    return this.role === 'owner' || this.role === 'admin';
+    return this.role === 'owner' || this.role === 'admin' || this.role === 'room-owner';
   }
 
   _build() {
@@ -81,10 +81,28 @@ export class AdminPanel {
             </div>
           </section>
 
+          <section class="admin-sec" id="adminRoomSec">
+            <h3>房间管理</h3>
+            <div class="admin-row">
+              <select id="adminTarget" class="online-input">
+                <option value="">选择玩家</option>
+              </select>
+              <button type="button" class="game-btn primary" id="adminLock1Btn">锁定 1 秒</button>
+              <button type="button" class="game-btn" id="adminLock5Btn">锁定 5 秒</button>
+            </div>
+            <div class="admin-row">
+              <button type="button" class="game-btn" id="adminGiveTargetBtn">赠送上方道具</button>
+              <button type="button" class="game-btn" id="adminHealTargetBtn">目标满血</button>
+              <button type="button" class="game-btn tiny ghost" id="adminRefreshTargetsBtn">刷新玩家</button>
+            </div>
+            <div id="adminTargetHint" class="admin-hint">房主可以管理当前房间玩家，所有操作由服务器校验。</div>
+          </section>
+
           <section class="admin-sec">
             <h3>刷实体 / 结构</h3>
             <div class="admin-row">
               <select id="adminMob" class="online-input"></select>
+              <input type="number" id="adminMobCount" class="online-input tiny-num" value="1" min="1" max="8" />
               <button type="button" class="game-btn primary" id="adminSpawnBtn">准星处生成</button>
             </div>
             <div class="admin-row">
@@ -134,6 +152,11 @@ export class AdminPanel {
     el.querySelector('#adminTpBtn').onclick = () => this.doTp();
     el.querySelector('#adminHereBtn').onclick = () => this.fillHere();
     el.querySelector('#adminGiveBtn').onclick = () => this.doGive();
+    el.querySelector('#adminGiveTargetBtn').onclick = () => this.doTargetGive();
+    el.querySelector('#adminHealTargetBtn').onclick = () => this.doTargetCommand('heal');
+    el.querySelector('#adminLock1Btn').onclick = () => this.doTargetCommand('lock', 1000);
+    el.querySelector('#adminLock5Btn').onclick = () => this.doTargetCommand('lock', 5000);
+    el.querySelector('#adminRefreshTargetsBtn').onclick = () => this.refreshTargets();
     el.querySelector('#adminHealBtn').onclick = () => this.game.adminHeal?.();
     el.querySelector('#adminFlyBtn').onclick = () => this.game.adminToggleFly?.();
     el.querySelector('#adminSpawnBtn').onclick = () => this.doSpawn();
@@ -169,6 +192,7 @@ export class AdminPanel {
     if (this.open) {
       this.fillHere();
       this.refreshOpList();
+      this.refreshTargets();
       // 打开时解除指针锁以便操作面板
       if (document.pointerLockElement) document.exitPointerLock();
     }
@@ -218,27 +242,49 @@ export class AdminPanel {
     }
     try { localStorage.setItem(AUTH_KEY, key); } catch { /* */ }
 
-    // 单机：先本地视为 owner，联机再向服务器确认
-    let role = 'owner';
+    // 一律向服务器鉴权；失败则拒绝（不再默认 owner）
     const net = this.game.net;
-    if (net) {
-      try {
-        await net.connect();
-        const res = await net.adminAuth(key, this.game._playerName?.() || '');
-        role = res.role || 'owner';
-        if (res.token) {
-          try { localStorage.setItem(AUTH_TOKEN, res.token); } catch { /* */ }
-        }
-        this.refreshOpList(res.admins);
-      } catch (err) {
-        // 联机失败仍允许单机管理（仅本地）
-        console.warn('[admin] auth remote fail, local owner', err);
-        role = 'owner';
+    if (!net) {
+      this.game._showSaveToast?.('网络模块不可用');
+      return;
+    }
+    let role = null;
+    try {
+      await net.connect();
+      const res = await net.adminAuth(key, this.game._playerName?.() || '');
+      role = res.role || null;
+      if (!role) {
+        this.role = null;
+        this._setAuthedUI();
+        this.game._showSaveToast?.('密钥无效');
+        return;
       }
+      if (res.token) {
+        try { localStorage.setItem(AUTH_TOKEN, res.token); } catch { /* */ }
+      }
+      this.refreshOpList(res.admins);
+    } catch (err) {
+      console.warn('[admin] auth fail', err);
+      this.role = null;
+      this._setAuthedUI();
+      this.game._showSaveToast?.('鉴权失败，请检查密钥与网络');
+      return;
     }
     this.role = role;
     this._setAuthedUI();
     this.game._showSaveToast?.(`已登录：${role}`);
+  }
+
+  async autoRoomOwner() {
+    if (this.authed || !this.game._online || !this.game.net) return;
+    try {
+      const res = await this.game.net.adminAuth('room-owner', this.game._playerName?.() || '');
+      if (res?.role !== 'room-owner') return;
+      this.role = res.role;
+      this._setAuthedUI();
+      this.refreshTargets(res.targets);
+      this.game._showSaveToast?.('你是本房房主，管理权限已开启（按 `）');
+    } catch { /* 普通加入者不应看到鉴权错误 */ }
   }
 
   tryAutoLogin() {
@@ -260,11 +306,13 @@ export class AdminPanel {
       badge.className = 'admin-badge ok';
       body.style.display = 'block';
       opSec.style.display = this.role === 'owner' ? 'block' : 'none';
+      this.el.querySelector('#adminRoomSec').style.display = this.role === 'room-owner' ? 'block' : 'none';
       catSec.style.display = this.role === 'owner' || this.role === 'admin' ? 'block' : 'none';
     } else {
       badge.textContent = '未登录';
       badge.className = 'admin-badge';
       body.style.display = 'none';
+      this.el.querySelector('#adminRoomSec').style.display = 'none';
     }
   }
 
@@ -310,12 +358,57 @@ export class AdminPanel {
     this.game.adminGive?.(typeId, n);
   }
 
+  async doTargetCommand(cmd, duration = 0) {
+    if (this.role !== 'room-owner') return;
+    const target = this.el.querySelector('#adminTarget').value;
+    if (!target) { this.game._showSaveToast?.('先选择玩家'); return; }
+    try {
+      const res = await this.game.net.adminCmd({ cmd, target, duration });
+      this.refreshTargets(res?.targets);
+      this.game._showSaveToast?.(cmd === 'lock' ? '已锁定玩家' : '已为玩家满血');
+    } catch (err) { this.game._showSaveToast?.(err.message || String(err)); }
+  }
+
+  async doTargetGive() {
+    if (this.role !== 'room-owner') return;
+    const target = this.el.querySelector('#adminTarget').value;
+    const typeId = +this.el.querySelector('#adminItem').value;
+    const count = Math.max(1, Math.min(64, +this.el.querySelector('#adminItemCount').value || 1));
+    if (!target) { this.game._showSaveToast?.('先选择玩家'); return; }
+    try {
+      const res = await this.game.net.adminCmd({ cmd: 'give', target, typeId, count });
+      this.refreshTargets(res?.targets);
+      this.game._showSaveToast?.('道具已送达');
+    } catch (err) { this.game._showSaveToast?.(err.message || String(err)); }
+  }
+
+  async refreshTargets(targets) {
+    if (this.role !== 'room-owner' || !this.game.net?.room) return;
+    try {
+      if (!targets) {
+        const res = await this.game.net.adminCmd({ cmd: 'targets' });
+        targets = res?.targets;
+      }
+      const select = this.el.querySelector('#adminTarget');
+      const old = select.value;
+      select.innerHTML = '<option value="">选择玩家</option>';
+      for (const p of targets || []) {
+        const option = document.createElement('option');
+        option.value = p.id;
+        option.textContent = `${p.name}${p.host ? ' · 房主' : ''} · HP ${p.hp}`;
+        select.appendChild(option);
+      }
+      if ([...select.options].some((o) => o.value === old)) select.value = old;
+    } catch { /* 房间尚未进入游戏 */ }
+  }
+
   doSpawn() {
     if (!this.authed) return;
     const kind = this.el.querySelector('#adminMob').value;
-    this.game.adminSpawn?.(kind);
+    const count = Math.max(1, Math.min(8, +this.el.querySelector('#adminMobCount').value || 1));
+    this.game.adminSpawn?.(kind, count);
     if (this.game._online && this.game.net?.room) {
-      this.game.net.adminCmd?.({ cmd: 'spawn', kind });
+      this.game.net.adminCmd?.({ cmd: 'spawn', kind, count });
     }
   }
 

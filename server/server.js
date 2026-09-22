@@ -22,11 +22,16 @@ const { RoomBoss, CollisionWorld } = await import('./room-boss.mjs');
 const { RoomTerrain } = await import('./room-terrain.mjs');
 const { isNukeCode, sanitizeChat } = await import('./room-chat.mjs');
 const { resolveNuke } = await import('./room-nuke.mjs');
-const { resetRoomTerrain,nextHost } = await import('./room-authority.mjs');
+const { resetRoomTerrain } = await import('./room-authority.mjs');
+const { isSolid } = await import('../js/voxel.js');
 const { getFoodHeal } = await import('../js/items.js');
+const { buildMobDrops } = await import('../js/loot.js');
 const PORT = Number(process.env.PORT || 3040);
 const HOST = process.env.HOST || '127.0.0.1';
 const OWNER_KEY = process.env.MC_OWNER_KEY || 'aikex-mc-2026';
+if (!process.env.MC_OWNER_KEY) {
+  console.warn('[mc] WARN: MC_OWNER_KEY unset — using insecure default. Set it in ecosystem.config.cjs');
+}
 const SEED = 12345;
 const MAX_PLAYERS = 8;
 const MAX_ROOMS = 64;
@@ -85,27 +90,76 @@ class Mob {
     this.hp = this.maxHp;
     this.speed = kind === 'heavy' ? 0.8 : 1.2;
     this.dir = Math.random() * Math.PI * 2;
+    this.state = 'wander';
+    this.stateTimer = 0;
     this.alive = true;
+    this.stuckTime = 0;
+    this.width = { pig:.8,cow:.95,chicken:.45,duck:.5,deer:.7,horse:.9,donkey:.85,scout:.7,heavy:.9,dragon:1.2 }[kind] || .8;
+    this.height = { pig:.85,cow:1.15,chicken:.55,duck:.55,deer:1.2,horse:1.4,donkey:1.25,scout:1,heavy:1.2,dragon:2 }[kind] || 1;
   }
 
   toJSON() {
     return {
       id: this.id, kind: this.kind,
       x: +this.x.toFixed(2), y: +this.y.toFixed(2), z: +this.z.toFixed(2),
-      yaw: +this.yaw.toFixed(3), hp: this.hp, maxHp: this.maxHp,
+      yaw: +this.yaw.toFixed(3), hp: this.hp, maxHp: this.maxHp, state: this.state,
     };
   }
 
-  tick(dt) {
+  _groundY(world, x, z) {
+    for (let y = 46; y >= 0; y--) {
+      if (isSolid(world.getBlock(Math.floor(x), y, Math.floor(z)))
+          && !isSolid(world.getBlock(Math.floor(x), y + 1, Math.floor(z)))
+          && !isSolid(world.getBlock(Math.floor(x), y + 2, Math.floor(z)))) return y + 1;
+    }
+    return null;
+  }
+
+  _canOccupy(world, x, y, z) {
+    const half = this.width * 0.5;
+    const minX = Math.floor(x - half + 0.08), maxX = Math.floor(x + half - 0.08);
+    const minZ = Math.floor(z - half + 0.08), maxZ = Math.floor(z + half - 0.08);
+    const minY = Math.floor(y + 0.05), maxY = Math.floor(y + this.height - 0.05);
+    for (let bx = minX; bx <= maxX; bx++) for (let bz = minZ; bz <= maxZ; bz++) {
+      for (let by = minY; by <= maxY; by++) if (isSolid(world.getBlock(bx, by, bz))) return false;
+    }
+    return true;
+  }
+
+  tick(dt, world) {
     if (!this.alive) return;
+    this.stateTimer = Math.max(0, this.stateTimer - dt);
+    if (this.state === 'flee' && this.stateTimer <= 0) this.state = 'wander';
     if (Math.random() < dt * 0.4) this.dir += (Math.random() - 0.5) * 1.2;
-    this.x += Math.cos(this.dir) * this.speed * dt;
-    this.z += Math.sin(this.dir) * this.speed * dt;
     // 圈在出生点附近
     const cx = 5.4, cz = 22.6;
     const dx = this.x - cx, dz = this.z - cz;
     if (dx * dx + dz * dz > 28 * 28) {
       this.dir = Math.atan2(cz - this.z, cx - this.x);
+    }
+    const offsets = [0, .55, -.55, 1.1, -1.1, Math.PI];
+    let moved = false;
+    const step = this.speed * (this.state === 'flee' ? 1.8 : 1) * Math.min(dt, .2);
+    for (const offset of offsets) {
+      const angle = this.dir + offset;
+      const x = this.x + Math.cos(angle) * step;
+      const z = this.z + Math.sin(angle) * step;
+      const y = this._groundY(world, x, z);
+      if (y === null || Math.abs(y - this.y) > 1.05 || !this._canOccupy(world, x, y, z)) continue;
+      this.x = x; this.y = y; this.z = z; this.dir = angle; moved = true; this.stuckTime = 0; break;
+    }
+    if (!moved) {
+      this.stuckTime += dt;
+      this.dir += 0.8 + Math.random() * 1.4;
+      if (this.stuckTime > 2) {
+        for (let i = 0; i < 12; i++) {
+          const a = Math.random() * Math.PI * 2, r = 0.8 + Math.random() * 2;
+          const x = this.x + Math.cos(a) * r, z = this.z + Math.sin(a) * r, y = this._groundY(world, x, z);
+          if (y !== null && Math.abs(y - this.y) <= 1.05 && this._canOccupy(world, x, y, z)) {
+            this.x = x; this.y = y; this.z = z; this.dir = a; this.stuckTime = 0; break;
+          }
+        }
+      }
     }
     this.yaw = this.dir;
   }
@@ -154,6 +208,13 @@ class Room {
     const m = this.mobs.get(id);
     if (!m || !m.alive) return null;
     m.hp -= Math.max(1, Math.min(10, dmg | 0 || 3));
+    const attacker = this.peers.get(byId);
+    if (attacker && Number.isFinite(attacker.x) && Number.isFinite(attacker.z)) {
+      const dx = m.x - attacker.x, dz = m.z - attacker.z;
+      if (Math.hypot(dx, dz) > 0.001) m.dir = Math.atan2(dz, dx);
+      m.state = 'flee';
+      m.stateTimer = 2.2;
+    }
     this.touch();
     if (m.hp <= 0) {
       m.alive = false;
@@ -165,7 +226,7 @@ class Room {
   }
 
   tickMobs(dt) {
-    for (const m of this.mobs.values()) m.tick(dt);
+    for (const m of this.mobs.values()) m.tick(dt, this.collision);
   }
 
   touch() {
@@ -186,11 +247,18 @@ class Room {
     for (const [ws, p] of this.peers) {
       if (ws === exceptWs) continue;
       list.push({
-        ...combat.state(p), name: p.name, color: p.color,
+        ...combat.state(p), name: p.name, color: p.color, host: !!p.isHost,
         x: p.x, y: p.y, z: p.z, yaw: p.yaw, pitch: p.pitch,
       });
     }
     return list;
+  }
+
+  adminTargets() {
+    return [...this.peers.values()].map((p) => ({
+      id: p.id, name: p.name, hp: p.hp, maxHp: 20,
+      dimension: p.dimension, host: !!p.isHost,
+    }));
   }
 
   playerNames() {
@@ -331,7 +399,7 @@ function leaveRoom(ws) {
   const peer = ws._peer;
   if (!peer || !peer.room) return;
   const room = peer.room;
-  const wasHost = peer.id === room.hostId;
+  const wasHost = !!peer.isHost;
   room.peers.delete(ws);
   room.broadcast({ t: 'bye', id: peer.id });
   peer.room = null;
@@ -342,8 +410,12 @@ function leaveRoom(ws) {
     schedulePersist();
   } else if (wasHost) {
     const next = room.peers.values().next().value;
-    if (next) room.hostName = next.name;
-    room.hostId=nextHost(room.peers);
+    if (next) {
+      room.hostName = next.name;
+      room.hostId = next.id;
+      next.isHost = true;
+      room.broadcast({ t: 'peer', ...combat.state(next), id: next.id, name: next.name, color: next.color, host: true });
+    }
     room.broadcast({t:'host',hostId:room.hostId});
     schedulePersist();
   }
@@ -366,18 +438,19 @@ function joinRoom(ws, room, name) {
   room.emptyAt = 0;
   const id = genId();
   const color = COLORS[room.peers.size % COLORS.length];
+  const isHost = room.peers.size === 0;
   const peer = {
     id,
     name: (name || '玩家').slice(0, 12),
     color,
     ...room.collision.spawn(), yaw: 0, pitch: -0.1,
     hp:20, active:false, invuln:0, dimension:'overworld', lastBossHit:-Infinity,
-    room, lastMove: 0,
+    room, lastMove: 0, isHost, lockedUntil: 0,
   };
+  if (isHost) {room.hostId = id;room.hostName=peer.name;}
   combat.init(peer);
   ws._peer = peer;
   room.peers.set(ws, peer);
-  if(!room.hostId){room.hostId=id;room.hostName=peer.name;}
   room.touch();
   room.broadcast({t:'host',hostId:room.hostId});
   console.log(`[mc-ws] join ${room.code} as ${peer.name} (${room.peers.size}/${MAX_PLAYERS})`);
@@ -398,12 +471,14 @@ function joinRoom(ws, room, name) {
     hostId:room.hostId||null,editsByDimension:room.terrain.toJSON(),terrainRevision:room.terrainRevision,lastNukeAt:room.lastNukeAt,dragonKilled:room.dragonKilled,
     players: room.playersList(ws),
     mobs: room.mobsArray(),
+    host: isHost,
+    roomAdmin: isHost,
   });
   room.broadcast({
     t: 'peer',
     ...combat.state(peer),
     id, name: peer.name, color,
-    x: peer.x, y: peer.y, z: peer.z, yaw: peer.yaw, pitch: peer.pitch,
+    x: peer.x, y: peer.y, z: peer.z, yaw: peer.yaw, pitch: peer.pitch, host: isHost,
   }, ws);
 }
 
@@ -446,13 +521,12 @@ function genToken() {
   return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
 }
 
-/** @returns {'owner'|'admin'|null} */
-function resolveRole(key, name) {
+/** @returns {'owner'|'admin'|null} — 必须凭密钥/token，禁止仅凭昵称提权 */
+function resolveRole(key, _name) {
   if (key && key === OWNER_KEY) return 'owner';
+  if (!key) return null;
   const data = loadAdmins();
-  const hit = (data.admins || []).find((a) =>
-    (key && a.token === key) || (name && a.name === name)
-  );
+  const hit = (data.admins || []).find((a) => a.token === key);
   return hit ? 'admin' : null;
 }
 
@@ -539,7 +613,9 @@ wss.on('connection', (ws) => {
 
     // —— 管理鉴权（可不在房间内）——
     if (msg.t === 'admin_auth') {
-      const role = resolveRole(String(msg.key || ''), String(msg.name || ''));
+      const roomOwner = String(msg.key || '') === 'room-owner'
+        && ws._peer?.room && ws._peer.isHost;
+      const role = roomOwner ? 'room-owner' : resolveRole(String(msg.key || ''), String(msg.name || ''));
       if (!role) {
         adminLog(`auth FAIL from ${msg.name || '?'}`);
         send(ws, { t: 'err', msg: '密钥无效' });
@@ -549,7 +625,7 @@ wss.on('connection', (ws) => {
       ws._adminKey = String(msg.key || '');
       let token;
       if (role === 'admin') {
-        const hit = (loadAdmins().admins || []).find((a) => a.token === msg.key || a.name === msg.name);
+        const hit = (loadAdmins().admins || []).find((a) => a.token === msg.key);
         token = hit?.token;
       }
       adminLog(`auth OK role=${role} name=${msg.name || '-'}`);
@@ -558,6 +634,7 @@ wss.on('connection', (ws) => {
         role,
         token,
         admins: role === 'owner' ? publicAdmins() : undefined,
+        targets: role === 'room-owner' ? ws._peer.room.adminTargets() : undefined,
       });
       return;
     }
@@ -565,17 +642,52 @@ wss.on('connection', (ws) => {
     if (msg.t === 'admin_cmd') {
       const key = String(msg.key || ws._adminKey || '');
       let role = ws._adminRole || resolveRole(key, ws._peer?.name || '');
-      // 房主对本房有限权限：刷怪
-      if (!role && ws._peer?.room && msg.cmd === 'spawn'
-          && ws._peer.id === ws._peer.room.hostId) {
-        role = 'admin';
-      }
+      // 房主权限只对当前房间生效，且每条命令都重新确认房主身份。
+      if (role === 'room-owner' && !ws._peer?.room?.peers?.has(ws)) role = null;
+      if (role === 'room-owner' && !ws._peer.isHost) role = null;
       if (!role) {
         adminLog(`cmd DENY ${msg.cmd}`);
         send(ws, { t: 'err', msg: '无管理权限' });
         return;
       }
       ws._adminRole = role;
+
+      const room = ws._peer?.room;
+      const roomCommand = ['targets', 'lock', 'give', 'heal', 'spawn', 'clear_mobs'].includes(msg.cmd);
+      if (role === 'room-owner' && !roomCommand) {
+        send(ws, { t: 'err', msg: '房主管理员只能管理当前房间' });
+        return;
+      }
+
+      if (msg.cmd === 'targets') {
+        if (!room) { send(ws, { t: 'err', msg: '请先进入房间' }); return; }
+        send(ws, { t: 'admin_ok', targets: room.adminTargets() });
+        return;
+      }
+
+      if (msg.cmd === 'lock' || msg.cmd === 'heal' || msg.cmd === 'give') {
+        if (!room) { send(ws, { t: 'err', msg: '请先进入房间' }); return; }
+        const target = [...room.peers.values()].find((p) => p.id === String(msg.target || ''));
+        if (!target) { send(ws, { t: 'err', msg: '目标玩家不存在' }); return; }
+        if (msg.cmd === 'lock') {
+          const duration = Math.max(1000, Math.min(10000, Number(msg.duration) || 1000));
+          target.lockedUntil = Date.now() + duration;
+          room.broadcast({ t: 'admin_effect', effect: 'lock', id: target.id, duration, by: ws._peer.id });
+          adminLog(`lock ${target.name} ${duration}ms in ${room.code} by ${ws._peer.name}`);
+        } else if (msg.cmd === 'heal') {
+          target.hp = 20;
+          target.deadUntil = 0;
+          room.broadcast({ t: 'admin_effect', effect: 'heal', id: target.id, hp: 20, by: ws._peer.id });
+          adminLog(`heal ${target.name} in ${room.code} by ${ws._peer.name}`);
+        } else {
+          const typeId = Math.max(0, Math.min(200, Number(msg.typeId) | 0));
+          const count = Math.max(1, Math.min(64, Number(msg.count) | 0 || 1));
+          room.broadcast({ t: 'admin_effect', effect: 'give', id: target.id, typeId, count, by: ws._peer.id });
+          adminLog(`give ${target.name} type=${typeId} x${count} in ${room.code} by ${ws._peer.name}`);
+        }
+        send(ws, { t: 'admin_ok', targets: room.adminTargets() });
+        return;
+      }
 
       if (msg.cmd === 'op_list') {
         if (role !== 'owner') {
@@ -649,16 +761,16 @@ wss.on('connection', (ws) => {
           send(ws, { t: 'admin_ok', note: 'local_only' });
           return;
         }
+        const allowed = new Set(['pig','cow','chicken','duck','deer','horse','donkey','scout','heavy','dragon']);
+        const catalog = loadCatalog();
+        for (const item of catalog.mobs || []) if (item.kind) allowed.add(String(item.kind));
         const kind = String(msg.kind || 'pig');
+        if (!allowed.has(kind)) { send(ws, { t: 'err', msg: '不支持的实体类型' }); return; }
+        const count = Math.max(1, Math.min(8, Number(msg.count) | 0 || 1));
         // 在房内广播，让各客户端本地刷一只（位置用发起者坐标）
-        room.broadcast({
-          t: 'admin_spawn',
-          kind,
-          x: peer.x, y: peer.y, z: peer.z,
-          by: peer.id,
-        });
-        adminLog(`spawn ${kind} in ${room.code} by ${peer.name}`);
-        send(ws, { t: 'admin_ok', ok: true });
+        room.broadcast({ t: 'admin_spawn', kind, count, x: peer.x, y: peer.y, z: peer.z, by: peer.id });
+        adminLog(`spawn ${kind} x${count} in ${room.code} by ${peer.name}`);
+        send(ws, { t: 'admin_ok', ok: true, targets: room.adminTargets() });
         return;
       }
 
@@ -773,7 +885,14 @@ wss.on('connection', (ws) => {
     }
     if (msg.t === 'blink') {
       if (room.spells.blink(peer, msg, Date.now())) {
-        room.broadcast({ t: 'combat', ...combat.state(peer), teleport: true });
+        room.broadcast({
+          t: 'combat',
+          ...combat.state(peer),
+          teleport: true,
+          nextBlink: peer.nextBlink || 0,
+        });
+      } else {
+        send(ws, { t: 'blink_fail', nextBlink: peer.nextBlink || 0 });
       }
       return;
     }
@@ -821,8 +940,14 @@ wss.on('connection', (ws) => {
       const result = room.hitMob(String(msg.id || ''), msg.dmg | 0 || 3, peer.id);
       if (!result) return;
       if (result.die) {
-        const DROP = { pig:[100,100], cow:[101,101], chicken:[102], duck:[106], deer:[103,103], horse:[104,104], donkey:[105,105], scout:[12,12], heavy:[10,3] };
-        room.broadcast({ t: 'mob_die', id: result.mob.id, by: peer.id, drops: DROP[result.mob.kind] || [100] });
+        const drops = buildMobDrops(result.mob.kind);
+        room.broadcast({
+          t: 'mob_die',
+          id: result.mob.id,
+          by: peer.id,
+          kind: result.mob.kind,
+          drops,
+        });
       } else {
         room.broadcast({ t: 'mob', ...result.mob });
       }
@@ -830,7 +955,8 @@ wss.on('connection', (ws) => {
     }
 
     if (msg.t === 'block') {
-      if(![msg.x,msg.y,msg.z,msg.b].every(Number.isFinite))return;
+      if(![msg.x,msg.y,msg.z,msg.b].every(Number.isSafeInteger)||
+         Math.abs(msg.x)>4096||Math.abs(msg.z)>4096||msg.y<0||msg.y>=48||msg.b<0||msg.b>255)return;
       const x = msg.x | 0, y = msg.y | 0, z = msg.z | 0, b = msg.b | 0;
       const dimension=peer.dimension;
       if (y < 0 || y >= 48) return;
@@ -844,6 +970,10 @@ wss.on('connection', (ws) => {
 
     if (msg.t === 'move') {
       const now = Date.now();
+      if (peer.lockedUntil > now) {
+        send(ws, { t: 'admin_effect', effect: 'lock', id: peer.id, duration: peer.lockedUntil - now });
+        return;
+      }
       if (now - peer.lastMove < MOVE_MIN_MS) return;
       peer.lastMove = now;
       if (!['x','y','z','yaw','pitch'].every(k=>Number.isFinite(msg[k]))) return;
@@ -864,9 +994,9 @@ wss.on('connection', (ws) => {
 
     if (msg.t === 'name') {
       peer.name = String(msg.name || peer.name).slice(0, 12);
-      if (room.hostId === peer.id) room.hostName = peer.name;
+      if (peer.isHost) room.hostName = peer.name;
       room.broadcast({
-        t: 'peer', id: peer.id, name: peer.name, color: peer.color,
+        t: 'peer', id: peer.id, name: peer.name, color: peer.color, host: !!peer.isHost,
         x: peer.x, y: peer.y, z: peer.z, yaw: peer.yaw, pitch: peer.pitch,
       }, ws);
       schedulePersist();
@@ -946,4 +1076,4 @@ function selfCheck() {
 selfCheck();
 
 }
-main().catch(error => { console.error('[mc-ws] startup failed', error); process.exitCode = 1; });
+main().catch(error => { console.error('[mc-ws] startup failed', error); process.exit(1); });

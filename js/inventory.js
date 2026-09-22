@@ -67,6 +67,34 @@ export class Inventory {
     return s ? s.type : 0;
   }
 
+  /** 某物品总数量 */
+  countOf(type) {
+    type = type | 0;
+    let n = 0;
+    for (const s of this.slots) {
+      if (s && s.type === type) n += s.count;
+    }
+    return n;
+  }
+
+  /** 第一个持有该 type 的格子，没有返回 -1 */
+  findSlot(type) {
+    type = type | 0;
+    for (let i = 0; i < this.size; i++) {
+      if (this.slots[i]?.type === type) return i;
+    }
+    return -1;
+  }
+
+  /** 第一个食物格子 */
+  findFoodSlot() {
+    for (let i = 0; i < this.size; i++) {
+      const t = this.slots[i]?.type;
+      if (t != null && t >= 100 && t <= 107) return i;
+    }
+    return -1;
+  }
+
   toJSON() {
     return this.slots.map((s) => (s ? [s.type, s.count] : null));
   }

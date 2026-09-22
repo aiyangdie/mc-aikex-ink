@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-let findStandY, hasLineOfSight;
-try { ({findStandY,hasLineOfSight}=await import('../js/boss-navigation.js')); } catch(e){if(e.code!=='ERR_MODULE_NOT_FOUND')throw e;}
+let findStandY, findGroundStep, hasLineOfSight;
+try { ({findStandY,findGroundStep,hasLineOfSight}=await import('../js/boss-navigation.js')); } catch(e){if(e.code!=='ERR_MODULE_NOT_FOUND')throw e;}
 const flat={getBlock:(x,y,z)=>y<=0?3:0};
 test('Boss stands on ground and steps up one block, never a tall wall or cliff',()=>{
   assert.ok(findStandY,'navigation implementation missing');
@@ -24,4 +24,12 @@ test('solid wall blocks melee sight',()=>{
   assert.equal(hasLineOfSight(flat,a,b),true);
   const wall={getBlock:(x,y,z)=>y<=0||(x===1&&y<=3)?3:0};
   assert.equal(hasLineOfSight(wall,a,b),false);
+});
+test('ground step chooses a safe side step around a low obstacle',()=>{
+  assert.ok(findGroundStep,'ground-step implementation missing');
+  const wall={getBlock:(x,y,z)=>y<=0||(x>=1&&x<=2&&z>=-1&&z<=1&&y<=2)?3:0};
+  const step=findGroundStep(wall,{x:.5,y:1,z:0},{x:4,y:1,z:0},{step:.5,maxStep:1.05});
+  assert.ok(step);
+  assert.ok(Math.abs(step.z) > .1);
+  assert.equal(Math.abs(step.y-1)<=1.05,true);
 });

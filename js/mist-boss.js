@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { BossCombat } from './boss-combat.js';
-import { findStandY, hasLineOfSight } from './boss-navigation.js';
+import { findStandY, findGroundStep, hasLineOfSight } from './boss-navigation.js';
 
 /** The original Mist Archives heroine rig, with an added local sword animation. */
 export class MistBoss {
@@ -53,6 +53,11 @@ export class MistBoss {
     this.model.position.x -= (center.x - this.group.position.x) * scale;
     this.model.position.z -= (center.z - this.group.position.z) * scale;
     this.model.position.y -= (bounds.min.y - this.group.position.y) * scale;
+    // GLB 的原点和视觉脚底不完全一致，缩放后再做一次世界坐标对齐。
+    this.group.updateMatrixWorld(true);
+    const grounded = new THREE.Box3().setFromObject(this.model);
+    this.model.position.y += this.group.position.y - grounded.min.y;
+    this.group.updateMatrixWorld(true);
     const bone = name => {
       let result;
       this.model.traverse(o => { if (o.isBone && o.name.replace(/[^a-zA-Z0-9]/g,'') === name) result = o; });
@@ -165,13 +170,8 @@ export class MistBoss {
       visible,playerAlive:player.hp>0,invulnerable:player.invuln>0});
     if (visible && distance > .01 && this.combat.state !== 'attack') this.group.rotation.y = Math.atan2(dx,dz);
     if (result.move) {
-      const angle = Math.atan2(dx,dz), step = 3.4*dt;
-      // Try direct pursuit, then a small side step. This is not full maze pathfinding.
-      for (const offset of [0,.65,-.65,1.2,-1.2]) {
-        const x=this.position.x+Math.sin(angle+offset)*step, z=this.position.z+Math.cos(angle+offset)*step;
-        const y=findStandY(this.world,x,z,this.position.y);
-        if (y !== null) { this.position.set(x,y,z); break; }
-      }
+      const step = findGroundStep(this.world, this.position, player.position, { step: 3.4 * dt, maxStep: 1.05 });
+      if (step) this.position.set(step.x, step.y, step.z);
     }
     if (result.attackStarted) {
       this.group.rotation.y = Math.atan2(dx,dz);

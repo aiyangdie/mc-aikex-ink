@@ -3,7 +3,7 @@
  * 炸毁可破坏方块、伤害生物与玩家、带击退
  */
 import * as THREE from 'three';
-import { BlockType, isSolid } from './voxel.js?v=lobby17';
+import { BlockType, isSolid } from './voxel.js?v=groundfix9';
 
 const FUSE = 2.4;
 const RADIUS = 3.6;
@@ -176,9 +176,14 @@ export class BombManager {
         const falloff = 1 - d / (r + 0.5);
         const dmg = Math.max(3, Math.round(BLAST_DMG * falloff));
         const dir = mob.position.clone().sub(center).normalize();
+        if (g._online && g.net?.room && mob._netDriven) {
+          g.net.sendHit(mob.id, dmg);
+          mob.hurtTimer = 0.35;
+          continue;
+        }
         const result = mob.takeDamage?.(dmg, dir, BLAST_KNOCK * falloff);
         if (result?.dead && result.drops) {
-          for (const drop of result.drops) g.inventory.add(drop, 1);
+          g._onLocalMobKill?.(mob, result.drops);
         }
       }
       g._updateHotbar?.();

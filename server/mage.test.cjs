@@ -19,17 +19,25 @@ test('fireball flight, impact, 5 second burning, expiry and dimension isolation'
   tick(ball.impact+5000); assert.equal(spells.fires.length,0); assert.equal(b.hp,12);
   assert.equal(spells.snapshot(ball.impact+5000).fires.length,0);
 });
-test('mage mode, dead casting, malformed targets and blink cooldown', () => {
-  const spells=new Spells(), p=player('p');
-  assert.equal(spells.cast(p,{end:[100,10,0]},0),null);
-  assert.equal(spells.cast(p,{end:[NaN,10,0]},0),null);
-  assert.equal(spells.cast(p,{end:[0,10,0],ground:[8,10,0]},0),null);
-  p.mode='ak'; assert.equal(spells.blink(p,{to:[0,10,5]},1000),false);
-  p.mode='mage'; assert.equal(spells.blink(p,{to:[0,10,9]},1000),false);
-  assert.equal(spells.blink(p,{to:[0,10,8]},1000),true);
-  assert.equal(spells.blink(p,{to:[0,10,0]},2000),false);
-  assert.equal(spells.blink(p,{to:[0,10,0]},6000),true);
-  p.hp=0;
-  assert.equal(spells.cast(p,{end:[0,10,0]},7000),null);
-  assert.equal(spells.blink(p,{to:[0,10,1]},12000),false);
+test('blink for all classes, cooldown, range and dead block', () => {
+  const spells = new Spells();
+  const p = player('p');
+  assert.equal(spells.cast(p, { end: [100, 10, 0] }, 0), null);
+  assert.equal(spells.cast(p, { end: [NaN, 10, 0] }, 0), null);
+  assert.equal(spells.cast(p, { end: [0, 10, 0], ground: [8, 10, 0] }, 0), null);
+
+  p.mode = 'ak';
+  assert.equal(spells.blink(p, { to: [0, 10, 5] }, 1000), true);
+  assert.equal(p.z, 5);
+  assert.equal(spells.blink(p, { to: [0, 10, 6] }, 2000), false); // CD 3.2s
+  assert.equal(spells.blink(p, { to: [0, 10, 20] }, 5000), false); // too far from z=5
+  assert.equal(spells.blink(p, { to: [0, 10, 8] }, 5000), true);
+  assert.equal(p.z, 8);
+
+  p.mode = 'build';
+  assert.equal(spells.blink(p, { to: [0, 10, 10] }, 9000), true);
+
+  p.hp = 0;
+  assert.equal(spells.cast(p, { end: [0, 10, 0] }, 12000), null);
+  assert.equal(spells.blink(p, { to: [0, 10, 1] }, 15000), false);
 });

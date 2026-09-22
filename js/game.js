@@ -4,25 +4,24 @@
  */
 
 import * as THREE from 'three';
-import { Combat } from './combat.js?v=mistboss3';
-
+import { Combat } from './combat.js?v=groundfix9';
 import {
   World, Chunk, BlockType, BlockNames, isSolid, Dim,
   CHUNK_SIZE, CHUNK_HEIGHT, RENDER_DISTANCE, getBlockColor, getBreakDrop,
   isMobileDevice, getRenderDistance,
-} from './voxel.js?v=mistboss3';
-import { AnimalManager } from './animals.js?v=mistboss3';
-import { SaveManager } from './save.js?v=mistboss3';
-import { NetClient, RemotePlayers } from './net.js?v=mistboss3';
-import { Inventory } from './inventory.js?v=mistboss3';
-import { isFood, isItem, getItemName, getItemColor, getFoodHeal, ItemType } from './items.js?v=mistboss3';
-import { BombManager, isBomb } from './bombs.js?v=mistboss3';
-import { tryLightPortal, standingInPortal, spawnReturnPortal } from './portals.js?v=mistboss3';
-import { EnderDragon } from './dragon.js?v=mistboss3';
-import { AdminPanel } from './admin-panel.js?v=mistboss3';
-import { buildStructure } from './structures.js?v=mistboss3';
-
-import { apiUrl } from './config.js';
+} from './voxel.js?v=groundfix9';
+import { AnimalManager } from './animals.js?v=groundfix9';
+import { SaveManager } from './save.js?v=groundfix9';
+import { NetClient, RemotePlayers } from './net.js?v=groundfix9';
+import { Inventory } from './inventory.js?v=groundfix9';
+import { isFood, isItem, getItemName, getItemColor, getFoodHeal, ItemType } from './items.js?v=groundfix9';
+import { BombManager, isBomb } from './bombs.js?v=groundfix9';
+import { tryLightPortal, standingInPortal, spawnReturnPortal } from './portals.js?v=groundfix9';
+import { EnderDragon } from './dragon.js?v=groundfix9';
+import { AdminPanel } from './admin-panel.js?v=groundfix9';
+import { buildStructure } from './structures.js?v=groundfix9';
+import { summarizeDrops, buildMobDrops } from './loot.js?v=groundfix9';
+import { apiUrl } from './config.js?v=groundfix9';
 import { MistBoss } from './mist-boss.js';
 import { shouldReviveSoloBoss,scheduleSoloRespawn } from './boss-respawn.js';
 import { RoomChat } from './room-chat.js';
@@ -109,6 +108,7 @@ class Player {
   update(dt) {
     // 限制最大帧间隔，防止穿墙
     dt = Math.min(dt, 0.05);
+    const adminLocked = performance.now() < (this.lockedUntil || 0);
     if (this.attackCooldown > 0) this.attackCooldown -= dt;
     if (this.invuln > 0) this.invuln -= dt;
 
@@ -127,10 +127,12 @@ class Player {
 
     // 根据输入计算目标速度
     const moveDir = new THREE.Vector3(0, 0, 0);
+    if (!adminLocked) {
     if (this.keys['KeyW'] || this.keys['ArrowUp']) moveDir.add(forward);
     if (this.keys['KeyS'] || this.keys['ArrowDown']) moveDir.sub(forward);
     if (this.keys['KeyA'] || this.keys['ArrowLeft']) moveDir.sub(right);
     if (this.keys['KeyD'] || this.keys['ArrowRight']) moveDir.add(right);
+    }
 
     if (moveDir.lengthSq() > 0) {
       moveDir.normalize();
@@ -159,8 +161,8 @@ class Player {
     // 管理飞行：空格上升，Shift 下降，无重力
     if (this.adminFly) {
       this.velocity.y = 0;
-      if (this.keys['Space'] || this.keys['KeyK']) this.velocity.y = 8;
-      if (this.keys['ShiftLeft'] || this.keys['ShiftRight']) this.velocity.y = -8;
+      if (!adminLocked && (this.keys['Space'] || this.keys['KeyK'])) this.velocity.y = 8;
+      if (!adminLocked && (this.keys['ShiftLeft'] || this.keys['ShiftRight'])) this.velocity.y = -8;
       this.position.x += this.velocity.x * dt;
       this.position.y += this.velocity.y * dt;
       this.position.z += this.velocity.z * dt;
@@ -194,7 +196,7 @@ class Player {
     }
 
     // 跳跃（仅在地面且不在水中）
-    if (!inWater && (this.keys['Space'] || this.keys['KeyK']) && this.onGround) {
+    if (!adminLocked && !inWater && (this.keys['Space'] || this.keys['KeyK']) && this.onGround) {
       this.velocity.y = this.jumpSpeed;
       this.onGround = false;
     }
@@ -772,6 +774,8 @@ export class Game {
     this._saveData = null;       // 启动时读到的存档
     this._dirtySinceSave = false;
     this._autosaveTimer = null;
+    this.profile = { name: '玩家' };
+    this.stats = { defeats: 0, deaths: 0, bossDefeats: 0 };
 
     // 联机
     this.net = null;
@@ -824,13 +828,19 @@ export class Game {
     this.adminPanel.tryAutoLogin();
     this._playerName = () => {
       const el = document.getElementById('playerNameInput');
-      return (el?.value || '玩家').trim().slice(0, 12) || '玩家';
+      const name = (el?.value || this.profile.name || '玩家').trim().slice(0, 12) || '玩家';
+      this.profile.name = name;
+      return name;
     };
+    const nameInput = document.getElementById('playerNameInput');
+    if (nameInput) nameInput.value = this.profile.name;
 
     // 读档：先灌差分，再生成区块（背景预览即是存档世界）
     this._saveData = SaveManager.load();
     if (this._saveData) {
       this._mistBossState = scheduleSoloRespawn(this._saveData.mistBoss || null);
+      this.profile = { ...this.profile, ...(this._saveData.profile || {}) };
+      this.stats = { ...this.stats, ...(this._saveData.stats || {}) };
       this.world.edits = SaveManager.arrayToEdits(this._saveData.edits);
       if (Array.isArray(this._saveData.inventory)) {
         this.inventory.fromJSON(this._saveData.inventory);
@@ -1207,8 +1217,8 @@ export class Game {
     document.addEventListener('keydown', (e) => {
       if(this._chatOpen){if(e.code==='Escape'){e.preventDefault();this._closeChat();}return;}
       if (this._dead) return;
-      if(e.code==='KeyT'&&this._online&&this.isRunning){e.preventDefault();this._openChat();return;}
       if (/INPUT|TEXTAREA|SELECT/.test(e.target.tagName) || e.target.isContentEditable) return;
+      if(e.code==='KeyT'&&this._online&&this.isRunning){e.preventDefault();this._openChat();return;}
       if (e.code === 'Escape' && this._fallbackActive) { this._pauseFallback(); return; }
       if (!this._controlsActive()) return;
       this.player.keys[e.code] = true;
@@ -1414,7 +1424,7 @@ export class Game {
   }
 
   _primaryAction() {
-    if (this.player.hp <= 0) return;
+    if (this.player.hp <= 0 || performance.now() < (this.player.lockedUntil || 0)) return;
     if (this.combat?.armed) { this.combat.shoot(); return; }
     if (!this.isRunning) return;
     this._refreshEntityTarget();
@@ -1436,7 +1446,7 @@ export class Game {
 
   /** 右键：食物则吃；炸弹投放；否则放置 */
   _secondaryAction() {
-    if (this.player.hp <= 0 || this.combat?.armed) return;
+    if (this.player.hp <= 0 || performance.now() < (this.player.lockedUntil || 0) || this.combat?.armed) return;
     if (!this.isRunning) return;
     const type = this.inventory.selectedType(this.selectedSlot);
     if (!type) {
@@ -1470,19 +1480,76 @@ export class Game {
   _eatSelected() {
     if (this.player.hp <= 0) return;
     const type = this.inventory.selectedType(this.selectedSlot);
-    if (!isFood(type)) return;
+    if (!isFood(type)) {
+      // 未选中肉时：自动切到第一格食物再提示
+      const foodSlot = this.inventory.findFoodSlot?.() ?? -1;
+      if (foodSlot >= 0) {
+        this.selectedSlot = foodSlot;
+        this._updateHotbar();
+        this._showSaveToast(`已选中${getItemName(this.inventory.selectedType(foodSlot))} · 再按 F 吃`);
+      } else {
+        this._showSaveToast('没有肉可吃 · 先打动物掉落');
+      }
+      return;
+    }
     if (this.player.hp >= this.player.maxHp) {
       this._showSaveToast('已经吃饱了');
       return;
     }
     if (!this.inventory.consume(this.selectedSlot, 1)) return;
     const heal = getFoodHeal(type);
+    // 联机也先本地回血，服务端 vitals 再校准
+    this.player.hp = Math.min(this.player.maxHp, this.player.hp + heal);
     if (this._online) this.net._send({t:'eat',item:type});
-    else this.player.hp = Math.min(this.player.maxHp, this.player.hp + heal);
     this._updateHotbar();
     this._updateHpHud();
     this._showSaveToast(`吃了${getItemName(type)} +${heal}❤`);
     this._dirtySinceSave = true;
+  }
+
+  /** 切到持有某物品的格子 */
+  _selectItemType(type) {
+    const slot = this.inventory.findSlot?.(type) ?? -1;
+    if (slot < 0) return false;
+    this.selectedSlot = slot;
+    this._updateHotbar();
+    return true;
+  }
+
+  /**
+   * 统一发奖：进背包、自动选肉、金币 HUD、命名提示
+   * @returns {{ got: number[], foodType: number, coins: number }}
+   */
+  _grantLoot(drops, { prey = '' } = {}) {
+    const received = [];
+    let rejected = 0;
+    for (const d of drops || []) {
+      const n = this.inventory.add(d, 1);
+      if (n > 0) received.push(d);
+      else rejected++;
+    }
+    const sum = summarizeDrops(received);
+    this._updateHotbar();
+    this._updateCoinHud();
+    if (sum.foodType) this._selectItemType(sum.foodType);
+    const head = prey ? `猎到${prey}！` : '击杀！';
+    let tip = `${head}${sum.label}`;
+    if (sum.foodType) tip += ' · 按 F 吃肉';
+    if (rejected) tip += ' · 背包满了';
+    this._showSaveToast(tip);
+    this._dirtySinceSave = true;
+    return sum;
+  }
+
+  /** 本地击杀收尸 + 发奖 */
+  _onLocalMobKill(mob, drops) {
+    this._recordDefeat('mob');
+    const list = drops?.length ? drops : buildMobDrops(mob.kind);
+    this._grantLoot(list, { prey: mob.def?.name || mob.kind || '' });
+    mob.dispose?.();
+    if (this.animalManager) {
+      this.animalManager.robots = this.animalManager.robots.filter((r) => r !== mob);
+    }
   }
 
   /** 1 木头 → 4 木板 */
@@ -1525,6 +1592,7 @@ export class Game {
       this._dirtySinceSave = true;
       if (robot.dead) {
         this._mistBossState={...this._mistBossState,respawnAt:Date.now()+60_000};
+        this._recordDefeat('boss');
         robot.dispose();
         this._mistBoss = null;
         this._showSaveToast('迷雾档案 Boss 已击败！');
@@ -1548,12 +1616,7 @@ export class Game {
     const result = robot.takeDamage(3);
     if (!result) return;
     if (result.dead) {
-      for (const d of result.drops) this.inventory.add(d, 1);
-      this._updateHotbar();
-      this._showSaveToast(`击杀${robot.def?.name || ''}！获得肉/掉落`);
-      robot.dispose();
-      this.animalManager.robots = this.animalManager.robots.filter((r) => r !== robot);
-      this._dirtySinceSave = true;
+      this._onLocalMobKill(robot, result.drops);
     } else {
       this._showSaveToast(`命中 ${robot.hp}/${robot.maxHp}`);
     }
@@ -1562,8 +1625,12 @@ export class Game {
   _onDragonDefeated() {
     if (this._dragonKilled) return;
     this._dragonKilled = true;
+    this._recordDefeat('boss');
     this._showSaveToast('⚔ 末影龙已被击败！');
-    for (let i = 0; i < 8; i++) this.inventory.add(107, 1); // DRAGON_MEAT
+    const drops = [];
+    for (let i = 0; i < 8; i++) drops.push(ItemType.DRAGON_MEAT);
+    for (let i = 0; i < 12; i++) drops.push(ItemType.COIN);
+    this._grantLoot(drops, { prey: '末影龙' });
     this.inventory.add(BlockType.OBSIDIAN, 8);
     this.inventory.add(BlockType.END_STONE, 16);
     this._updateHotbar();
@@ -1799,6 +1866,8 @@ export class Game {
 
   _showDeathScreen() {
     if (this._dead) return;
+    this.stats ||= { defeats: 0, deaths: 0, bossDefeats: 0 };
+    this.stats.deaths = (this.stats.deaths || 0) + 1;
     this._dead = true;
     this._fallbackActive = false;
     this._lockPending = false;
@@ -1934,9 +2003,15 @@ export class Game {
     const el = document.createElement('div');
     el.id = 'hpHud';
     el.style.display = 'none';
-    el.innerHTML = '<span class="hp-label">❤</span><progress id="hpBar" max="20" value="20"></progress><span id="hpHearts"></span>';
+    el.innerHTML =
+      '<span class="hp-label">❤</span><progress id="hpBar" max="20" value="20"></progress>' +
+      '<span id="hpHearts"></span>' +
+      '<span id="coinHud" class="coin-hud">金 0</span>' +
+      '<span id="defeatHud" class="defeat-hud">击败 0</span>';
     document.body.appendChild(el);
     this._updateHpHud();
+    this._updateCoinHud();
+    this._updateDefeatHud();
   }
 
   _updateHpHud() {
@@ -1947,6 +2022,27 @@ export class Game {
     if (bar) bar.value = hp;
     hearts.textContent = `${hp} / ${this.player.maxHp}`;
     hearts.style.color = hp <= 4 ? '#ff5252' : '#fff';
+    this._updateCoinHud();
+  }
+
+  _updateCoinHud() {
+    const el = document.getElementById('coinHud');
+    if (!el || !this.inventory) return;
+    const n = this.inventory.countOf?.(ItemType.COIN) || 0;
+    el.textContent = `金 ${n}`;
+  }
+
+  _updateDefeatHud() {
+    const el = document.getElementById('defeatHud');
+    if (el) el.textContent = `击败 ${this.stats?.defeats || 0}`;
+  }
+
+  _recordDefeat(kind = 'mob') {
+    this.stats.defeats = (this.stats.defeats || 0) + 1;
+    if (kind === 'boss') this.stats.bossDefeats = (this.stats.bossDefeats || 0) + 1;
+    this._updateDefeatHud();
+    this._dirtySinceSave = true;
+    this._showSaveToast(`⚔ 击败 ${kind === 'boss' ? 'Boss' : '目标'} · 总计 ${this.stats.defeats}`);
   }
 
   /** 存档 UI：开始屏 / 暂停屏按钮 */
@@ -2088,6 +2184,8 @@ export class Game {
     const pos = this.player.position;
     const r = SaveManager.save({
       mistBoss: this._online ? this._mistBossState : (this._mistBoss?.toJSON() || this._mistBossState),
+      profile: this.profile,
+      stats: this.stats,
       seed: this.world.seed,
       selectedSlot: this.selectedSlot,
       hp: this.player.hp,
@@ -2176,7 +2274,7 @@ export class Game {
 
     this.net.on('fireball', msg => this.combat?.mage.receive(msg));
     this.net.on('fire', msg => this.combat?.mage.receive(msg));
-
+    this.net.on('blink_fail', msg => this.combat?.mage.onBlinkFail?.(msg));
     this.net.on('block', (msg) => {
       if(Number.isSafeInteger(msg.revision) && msg.revision<=this._terrainRevision)return;
       if(Number.isSafeInteger(msg.revision))this._terrainRevision=msg.revision;
@@ -2191,6 +2289,7 @@ export class Game {
       this._dirtySinceSave = true;
     });
     this.net.on('peer', (msg) => {
+      if (msg.host && msg.id === this.net.id) this.adminPanel?.autoRoomOwner?.();
       if (msg.id === this.net.id) return;
       this.remotes.upsert(msg);
       this._updateRoomHud();
@@ -2238,14 +2337,31 @@ export class Game {
       if (!this.animalManager) return;
       this.animalManager.removeById(msg.id);
       if (msg.by === this.net.id && Array.isArray(msg.drops)) {
-        for (const d of msg.drops) this.inventory.add(d, 1);
-        this._updateHotbar();
-        this._showSaveToast('击杀！获得掉落物');
+        this._grantLoot(msg.drops, { prey: msg.kind || '' });
       }
     });
     this.net.on('admin_spawn', (msg) => {
       if (!msg || msg.by === this.net.id) return; // 发起者本地已刷
-      this._adminSpawnAt(msg.kind, msg.x, msg.y, msg.z);
+      const count = Math.max(1, Math.min(8, msg.count | 0 || 1));
+      for (let i = 0; i < count; i++) {
+        this._adminSpawnAt(msg.kind, msg.x + (i % 3) * 1.4, msg.y, msg.z + Math.floor(i / 3) * 1.4);
+      }
+    });
+    this.net.on('admin_effect', (msg) => {
+      if (!msg || msg.id !== this.net.id) return;
+      if (msg.effect === 'lock') {
+        this.player.lockedUntil = performance.now() + Math.max(250, Number(msg.duration) || 1000);
+        this.player.keys = {};
+        this._showSaveToast('房主将你定身了');
+      } else if (msg.effect === 'heal') {
+        this.player.hp = this.player.maxHp;
+        this._updateHpHud();
+        this._showSaveToast('房主给你恢复了生命');
+      } else if (msg.effect === 'give') {
+        const got = this.inventory.add(msg.typeId | 0, msg.count | 0);
+        this._updateHotbar();
+        this._showSaveToast(`房主赠送道具 ×${got}`);
+      }
     });
   }
 
@@ -2285,7 +2401,7 @@ export class Game {
     this._showSaveToast(this.player.adminFly ? '飞行开启（空格↑ Shift↓）' : '飞行关闭');
   }
 
-  adminSpawn(kind) {
+  adminSpawn(kind, count = 1) {
     if (!this.adminPanel?.authed) return;
     const origin = this.camera.position.clone();
     const dir = new THREE.Vector3(
@@ -2301,8 +2417,11 @@ export class Game {
       y = this.player.targetBlock.y + 1;
       z = this.player.targetBlock.z + 0.5;
     }
-    this._adminSpawnAt(kind, x, y, z);
-    this._showSaveToast(`已生成 ${kind}`);
+    const total = Math.max(1, Math.min(8, count | 0));
+    for (let i = 0; i < total; i++) {
+      this._adminSpawnAt(kind, x + (i % 3) * 1.4, y, z + Math.floor(i / 3) * 1.4);
+    }
+    this._showSaveToast(`已生成 ${kind} ×${total}`);
   }
 
   _adminSpawnAt(kind, x, y, z) {
@@ -2391,6 +2510,7 @@ export class Game {
   _enterFromOnline(msg) {
     this._clearMistBoss();
     this._online = true;
+    if (msg.roomAdmin) this.adminPanel?.autoRoomOwner?.();
     this._hostWaiting = false;
     this.net.startHeartbeat();
     this._applyRoomState(msg);
@@ -2971,14 +3091,16 @@ export class Game {
 
     if (!this._online && !this._mistBoss && shouldReviveSoloBoss(this._mistBossState) && this.isRunning) this._ensureMistBoss();
     if (this._online && this._mistBoss) this._mistBoss.update(dt,this.player);
+    const entityDt = (!this._dead && this._controlsActive()) ? dt : 0;
+    if (this._online && this._mistBoss) this._mistBoss.update(entityDt,this.player);
     this.combat?.tick(dt);
     if (this.player) this.player._armedLook = !!this.combat?.armed;
     this._tickFov(dt);
     if (this.bombs) this.bombs.tick(dt);
     if (this.remotes) this.remotes.update(dt, this.camera, this.dimension);
 
-    if (this.animalManager) this.animalManager.update(dt, this.camera);
-    if (this._dragon) this._dragon.update(dt);
+    if (this.animalManager) this.animalManager.update(entityDt, this.camera);
+    if (this._dragon) this._dragon.update(entityDt);
 
     // 渲染
     this.renderer.render(this.scene, this.camera);

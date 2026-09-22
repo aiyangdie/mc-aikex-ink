@@ -76,6 +76,8 @@ export const SaveManager = {
         hp: state.hp != null ? state.hp : 20,
         inventory: state.inventory || null,
         mistBoss: state.mistBoss || null,
+        profile: state.profile || null,
+        stats: state.stats || null,
         player: {
           x: +state.player.x,
           y: +state.player.y,

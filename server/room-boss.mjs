@@ -1,6 +1,6 @@
 import {World,Chunk,CHUNK_SIZE,CHUNK_HEIGHT,isSolid} from '../js/voxel.js';
 import {BossCombat} from '../js/boss-combat.js';
-import {findStandY,hasLineOfSight} from '../js/boss-navigation.js';
+import {findStandY,findGroundStep,hasLineOfSight} from '../js/boss-navigation.js';
 
 // Reuse the actual generator, without WebGL/DOM. Cache only nearby base chunks;
 // edits are read on every query so placed walls immediately affect pursuit/hits.
@@ -96,12 +96,8 @@ export class RoomBoss {
     if(this.combat.state!=='attack'||result.attackStarted)this.yaw=Math.atan2(dx,dz);
     if(result.attackStarted){this.attackId++;this.targetId=target.id;}
     if(result.move){
-      const a=Math.atan2(dx,dz),step=3.4*Math.min(dt,.05);
-      for(const offset of [0,.65,-.65,1.2,-1.2]){
-        const x=this.position.x+Math.sin(a+offset)*step,z=this.position.z+Math.cos(a+offset)*step;
-        const y=findStandY(this.world,x,z,this.position.y);
-        if(y!==null){this.position={x,y,z};break;}
-      }
+      const step=findGroundStep(this.world,this.position,target,{step:3.4*Math.min(dt,.05),maxStep:1.05});
+      if(step) this.position={x:step.x,y:step.y,z:step.z};
     }
     if(result.hit){target.hp=Math.max(0,target.hp-result.hit);target.invuln=.6;if(!target.hp)target.manualRespawn=true;events.push({id:target.id,hp:target.hp,damage:result.hit,cause:'mist-boss'});}
     return events;

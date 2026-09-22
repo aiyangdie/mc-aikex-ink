@@ -2,6 +2,12 @@
 const combat = require('./combat.cjs');
 const vector = v => Array.isArray(v) && v.length === 3 && v.every(Number.isFinite);
 const distance = (a, b) => Math.hypot(...a.map((n, i) => n - b[i]));
+
+/** 与客户端 js/mage.js 保持一致 */
+const BLINK_CD = 3200;
+const BLINK_MAX = 8.5;
+const FIREBALL_CD = 900;
+
 class Spells {
   constructor() { this.projectiles = []; this.fires = []; this.sequence = 0; }
   cast(p, msg, now) {
@@ -11,7 +17,7 @@ class Spells {
     if (msg.ground != null && (!vector(msg.ground) ||
       Math.hypot(msg.ground[0] - msg.end[0], msg.ground[2] - msg.end[2]) > .5 ||
       msg.ground[1] > msg.end[1] + .2 || msg.end[1] - msg.ground[1] > 48)) return null;
-    p.nextFireball = now + 900;
+    p.nextFireball = now + FIREBALL_CD;
     const ball = { t: 'fireball', id: ++this.sequence, by: p.id, dimension: p.dimension,
       origin, end: msg.end, ground: msg.ground || null, start: now,
       impact: now + Math.max(80, distance(origin, msg.end) / 22 * 1000) };
@@ -19,9 +25,10 @@ class Spells {
     return ball;
   }
   blink(p, msg, now) {
-    if (p.hp <= 0 || p.mode !== 'mage' || now < (p.nextBlink || 0) || !vector(msg.to)) return false;
-    if (distance([p.x, p.y, p.z], msg.to) > 8.5) return false;
-    p.nextBlink = now + 5000;
+    // 全职业可闪现；距离与冷却由服务端校验
+    if (p.hp <= 0 || now < (p.nextBlink || 0) || !vector(msg.to)) return false;
+    if (distance([p.x, p.y, p.z], msg.to) > BLINK_MAX) return false;
+    p.nextBlink = now + BLINK_CD;
     [p.x, p.y, p.z] = msg.to;
     return true;
   }
@@ -51,4 +58,4 @@ class Spells {
     }
   }
 }
-module.exports = { Spells };
+module.exports = { Spells, BLINK_CD, BLINK_MAX, FIREBALL_CD };

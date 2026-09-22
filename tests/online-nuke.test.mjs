@@ -24,6 +24,9 @@ test('two rooms: authoritative nuke and reset are scoped and persistent', {timeo
  victim.send({t:'join',room:a.room,name:'victim'});const b=await victim.wait(m=>m.t==='joined');
  outsider.send({t:'create',name:'outsider'});const c=await outsider.wait(m=>m.t==='joined');
  caster.send({t:'play'});victim.send({t:'play'});outsider.send({t:'play'});
+ caster.send({t:'block',x:4294967296,y:19,z:0,b:0});
+ caster.send({t:'sync'});assert.deepEqual((await caster.wait(m=>m.t==='sync')).editsByDimension.overworld,[]);
+
  victim.send({t:'move',x:b.self.x,y:b.self.y,z:b.self.z,dimension:'nether',yaw:0,pitch:0});
  caster.send({t:'chat',text:'Maydaymayday'});
  const event=await victim.wait(m=>m.t==='nuke');assert.equal(event.casterId,a.id);

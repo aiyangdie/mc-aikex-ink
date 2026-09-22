@@ -14,10 +14,19 @@ echo "[deploy] $(date -Is) pull…"
 git -c safe.directory="$ROOT" fetch origin main
 git -c safe.directory="$ROOT" reset --hard origin/main
 
+cd "$ROOT"
+# Boss/collision 服务端会 import ../js/voxel.js → 需要根目录 three（勿全量装 playwright）
+if [[ ! -d node_modules/three ]]; then
+  npm install three@0.160.0 --no-save --omit=dev
+fi
+
 cd "$ROOT/server"
 if [[ ! -f ecosystem.config.cjs ]]; then
   cp ecosystem.config.cjs.example ecosystem.config.cjs
   echo "[deploy] WARN: created ecosystem.config.cjs from example — set MC_OWNER_KEY"
+fi
+if grep -q "change-me-owner-key\|aikex-mc-2026" ecosystem.config.cjs 2>/dev/null; then
+  echo "[deploy] WARN: MC_OWNER_KEY still looks like a default — rotate before public use"
 fi
 npm install --omit=dev
 mkdir -p data

@@ -37,9 +37,17 @@ try{
  if(await victim.locator('#btnEnterRoom').isVisible())await victim.locator('#btnEnterRoom').click();
  await host.waitForFunction(()=>window.__testGame._online&&window.__testGame.isRunning);
  await victim.waitForFunction(()=>window.__testGame._online&&window.__testGame.isRunning,null,{timeout:5000});
+ for(const [page,x] of [[host,80],[victim,90]])await page.evaluate(x=>{
+   const g=window.__testGame;g.player.adminFly=true;g.player.position.set(x,20,80);
+   g.net._send({t:'move',x,y:20,z:80,dimension:'overworld',yaw:0,pitch:0});
+ },x);
  await host.mouse.move(500,400);await host.mouse.move(540,400);
  const yaw=await host.evaluate(()=>window.__testGame.player.yaw);
  assert.notEqual(yaw,0,'fallback hover must rotate without button');
+ await host.evaluate(()=>{const field=document.createElement('input');field.id='testFocusedInput';document.body.appendChild(field);field.focus();});
+ await host.keyboard.press('t');
+ assert.equal(await host.evaluate(()=>window.__testGame._chatOpen),false,'typing T in another input must not steal focus');
+ await host.locator('#testFocusedInput').evaluate(el=>el.remove());await host.mouse.click(600,400);
  await host.keyboard.press('t');await host.locator('#roomChatInput').waitFor({state:'visible'});
  const before=await host.evaluate(()=>window.__testGame.player.yaw);
  await host.mouse.move(620,400);
@@ -54,13 +62,14 @@ try{
  await host.mouse.move(610,410);await host.mouse.up({button:'right'});
  assert.equal(await host.evaluate(()=>window.__testGame.__places),1,'right button action never duplicates on release');
  await host.keyboard.press('t');await host.locator('#roomChatInput').waitFor({state:'visible'});
+ const casterHpBefore=await host.evaluate(()=>window.__testGame.player.hp);
  await host.locator('#roomChatInput').fill('Maydaymayday');await host.locator('#roomChatInput').press('Enter');
  await victim.locator('#deathScreen').waitFor({state:'visible',timeout:12000});
  assert.match(await victim.locator('#deathReason').textContent(),/核弹/);
  await host.waitForFunction(()=>window.__testGame._netBossState?.hp===0);
  assert.ok(await host.locator('#nukeFlash').count(),'blast flash overlay visible in DOM');
  const state=await host.evaluate(()=>({hp:window.__testGame.player.hp,edits:window.__testGame.world.edits.size}));
- assert.equal(state.hp,20);assert.ok(state.edits>0);
+ assert.equal(state.hp,casterHpBefore,'nuke must not damage its caster');assert.ok(state.edits>0);
  await mkdir('docs/verification',{recursive:true});await host.screenshot({path:'docs/verification/room-nuke-local.png'});
  await host.locator('#btnTerrainReset').waitFor({state:'visible'});
  host.once('dialog',dialog=>dialog.accept());await host.locator('#btnTerrainReset').click();
