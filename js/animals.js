@@ -257,10 +257,11 @@ class Critter {
     return { dead: false, drops: [] };
   }
 
-  applyNetPose(x, y, z, yaw, hp) {
+  applyNetPose(x, y, z, yaw, hp, state) {
     this.position.set(x, y, z);
     if (yaw != null) { this.rotation = yaw; this.targetRotation = yaw; }
     if (hp != null) { this.hp = hp; this._syncHpLabel(); }
+    if (state) this.state = state;
     this.group.position.set(x, y, z);
     this.group.rotation.y = this.rotation;
   }
@@ -299,7 +300,13 @@ class Critter {
         mat.color.setHex(this.hurtTimer > 0 ? 0xff4444 : hex);
       }
     }
-    if (this._netDriven) return;
+    if (this._netDriven) {
+      this.bobPhase += dt * (this.state === 'idle' ? 2 : 6);
+      const bob = this.state !== 'idle' ? Math.sin(this.bobPhase) * 0.02 : 0;
+      this.group.position.set(this.position.x, this.position.y + bob, this.position.z);
+      this.group.rotation.y = this.rotation;
+      return;
+    }
 
     // 击退物理：冲量 + 落地摩擦
     if (this.knockVelocity.lengthSq() > 0.01) {
@@ -365,7 +372,7 @@ class Critter {
     return {
       id: this.id, kind: this.kind,
       x: +this.position.x.toFixed(2), y: +this.position.y.toFixed(2), z: +this.position.z.toFixed(2),
-      yaw: +this.rotation.toFixed(3), hp: this.hp, maxHp: this.maxHp,
+      yaw: +this.rotation.toFixed(3), hp: this.hp, maxHp: this.maxHp, state: this.state,
     };
   }
 
@@ -478,7 +485,7 @@ export class AnimalManager {
         this.robots.push(bot);
       }
       bot._netDriven = true;
-      bot.applyNetPose(m.x, m.y, m.z, m.yaw, m.hp);
+      bot.applyNetPose(m.x, m.y, m.z, m.yaw, m.hp, m.state);
     }
   }
 
@@ -491,7 +498,7 @@ export class AnimalManager {
       });
       this.robots.push(bot);
     }
-    bot.applyNetPose(m.x, m.y, m.z, m.yaw, m.hp);
+    bot.applyNetPose(m.x, m.y, m.z, m.yaw, m.hp, m.state);
     if (m.hurt) bot.hurtTimer = 0.35;
   }
 
