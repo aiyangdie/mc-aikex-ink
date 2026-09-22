@@ -4,24 +4,24 @@
  */
 
 import * as THREE from 'three';
-import { Combat } from './combat.js?v=animalfix8';
+import { Combat } from './combat.js?v=groundfix9';
 import {
   World, Chunk, BlockType, BlockNames, isSolid, Dim,
   CHUNK_SIZE, CHUNK_HEIGHT, RENDER_DISTANCE, getBlockColor, getBreakDrop,
   isMobileDevice, getRenderDistance,
-} from './voxel.js?v=animalfix8';
-import { AnimalManager } from './animals.js?v=animalfix8';
-import { SaveManager } from './save.js?v=animalfix8';
-import { NetClient, RemotePlayers } from './net.js?v=animalfix8';
-import { Inventory } from './inventory.js?v=animalfix8';
-import { isFood, isItem, getItemName, getItemColor, getFoodHeal, ItemType } from './items.js?v=animalfix8';
-import { BombManager, isBomb } from './bombs.js?v=animalfix8';
-import { tryLightPortal, standingInPortal, spawnReturnPortal } from './portals.js?v=animalfix8';
-import { EnderDragon } from './dragon.js?v=animalfix8';
-import { AdminPanel } from './admin-panel.js?v=animalfix8';
-import { buildStructure } from './structures.js?v=animalfix8';
-import { summarizeDrops, buildMobDrops } from './loot.js?v=animalfix8';
-import { apiUrl } from './config.js?v=animalfix8';
+} from './voxel.js?v=groundfix9';
+import { AnimalManager } from './animals.js?v=groundfix9';
+import { SaveManager } from './save.js?v=groundfix9';
+import { NetClient, RemotePlayers } from './net.js?v=groundfix9';
+import { Inventory } from './inventory.js?v=groundfix9';
+import { isFood, isItem, getItemName, getItemColor, getFoodHeal, ItemType } from './items.js?v=groundfix9';
+import { BombManager, isBomb } from './bombs.js?v=groundfix9';
+import { tryLightPortal, standingInPortal, spawnReturnPortal } from './portals.js?v=groundfix9';
+import { EnderDragon } from './dragon.js?v=groundfix9';
+import { AdminPanel } from './admin-panel.js?v=groundfix9';
+import { buildStructure } from './structures.js?v=groundfix9';
+import { summarizeDrops, buildMobDrops } from './loot.js?v=groundfix9';
+import { apiUrl } from './config.js?v=groundfix9';
 import { MistBoss } from './mist-boss.js';
 import { findStandY } from './boss-navigation.js';
 
@@ -3019,15 +3019,16 @@ export class Game {
       if (!this._online && this.player.hp <= 0) this._showDeathScreen();
     }
 
-    if (this._online && this._mistBoss) this._mistBoss.update(dt,this.player);
+    const entityDt = (!this._dead && this._controlsActive()) ? dt : 0;
+    if (this._online && this._mistBoss) this._mistBoss.update(entityDt,this.player);
     this.combat?.tick(dt);
     if (this.player) this.player._armedLook = !!this.combat?.armed;
     this._tickFov(dt);
     if (this.bombs) this.bombs.tick(dt);
     if (this.remotes) this.remotes.update(dt, this.camera, this.dimension);
 
-    if (this.animalManager) this.animalManager.update(dt, this.camera);
-    if (this._dragon) this._dragon.update(dt);
+    if (this.animalManager) this.animalManager.update(entityDt, this.camera);
+    if (this._dragon) this._dragon.update(entityDt);
 
     // 渲染
     this.renderer.render(this.scene, this.camera);
