@@ -1191,7 +1191,14 @@ export class Game {
     this.roomChat.focus();
   }
   _closeChat(){this._chatOpen=false;this.roomChat?.close();}
-  _confirmTerrainReset(){ /* server-side authorization wired in terrain reset task */ }
+  _confirmTerrainReset(){
+    if(!this._online||this._roomHostId!==this.net.id)return;
+    this._chatOpen=true;this.player.keys={};
+    if(document.pointerLockElement===this.canvas)document.exitPointerLock();
+    const accepted=window.confirm('将永久清除当前房间所有维度的建设和弹坑，且无法撤销。确认重置地形？');
+    this._chatOpen=false;
+    if(accepted)this.net.sendTerrainReset();
+  }
 
   /** 绑定事件监听 */
   _initEvents() {
@@ -2126,6 +2133,11 @@ export class Game {
     this.net.on('shot', msg => this.combat?.trace(msg));
     this.net.on('boss', msg => this._syncOnlineBoss(msg.boss));
     this.net.on('chat',msg=>this.roomChat?.append(msg.by,msg.text));
+    this.net.on('host',msg=>{this._roomHostId=msg.hostId;this.roomChat?.host(msg.hostId===this.net.id);});
+    this.net.on('terrain_reset',msg=>{
+      if(Number.isSafeInteger(msg.revision)&&msg.revision<=this._terrainRevision)return;
+      this._replaceRoomTerrain(msg);this._showSaveToast('房主已重置地形');
+    });
     this.net.on('nuke',msg=>{
       if(Number.isSafeInteger(msg.sequence)&&msg.sequence<=this._terrainRevision)return;
       this._terrainRevision=msg.sequence;
@@ -2335,17 +2347,9 @@ export class Game {
     this._showSaveToast('已清空附近生物');
   }
 
-  /** 用房间差分覆盖本地世界 */
-  _applyRoomState(msg) {
-    if (this.combat) {
-      this.combat.mage.clear();
-      for (const spell of [...(msg.spells?.projectiles || []), ...(msg.spells?.fires || [])]) this.combat.mage.receive(spell);
-      this.net._send({t:'mode',mode:this.combat.mode});
-    }
-    if (msg.self) this.combat?.receive(msg.self);
-    this._terrainRevision=Number.isSafeInteger(msg.terrainRevision)?msg.terrainRevision:0;
-    this._roomHostId=msg.hostId||null;
-    this.roomChat?.host(this._roomHostId===this.net.id);
+  _replaceRoomTerrain(msg){
+    this._terrainRevision=Number.isSafeInteger(msg.revision)?msg.revision:
+      (Number.isSafeInteger(msg.terrainRevision)?msg.terrainRevision:0);
     const edits=msg.editsByDimension||{overworld:msg.edits||[]};
     for(const dim of [Dim.OVERWORLD,Dim.NETHER,Dim.END])this._dimEdits[dim]=SaveManager.arrayToEdits(edits[dim]||[]);
     this.world.edits=this._dimEdits[this.dimension];
@@ -2355,14 +2359,23 @@ export class Game {
       chunk.dirty = true;
       if (chunk.mesh) this.scene.remove(chunk.mesh);
       if (chunk.waterMesh) this.scene.remove(chunk.waterMesh);
-      chunk.buildMesh(
-        (wx, wy, wz) => this.world.getBlock(wx, wy, wz),
-        this.world.material,
-        this.world.waterMaterial
-      );
+      chunk.buildMesh((wx,wy,wz)=>this.world.getBlock(wx,wy,wz),this.world.material,this.world.waterMaterial);
       if (chunk.mesh) this.scene.add(chunk.mesh);
       if (chunk.waterMesh) this.scene.add(chunk.waterMesh);
     }
+  }
+
+  /** 用房间差分覆盖本地世界 */
+  _applyRoomState(msg) {
+    if (this.combat) {
+      this.combat.mage.clear();
+      for (const spell of [...(msg.spells?.projectiles || []), ...(msg.spells?.fires || [])]) this.combat.mage.receive(spell);
+      this.net._send({t:'mode',mode:this.combat.mode});
+    }
+    if (msg.self) this.combat?.receive(msg.self);
+    this._roomHostId=msg.hostId||null;
+    this.roomChat?.host(this._roomHostId===this.net.id);
+    this._replaceRoomTerrain(msg);
     this.remotes.clear();
     for (const p of (msg.players || [])) {
       this.remotes.upsert(p);

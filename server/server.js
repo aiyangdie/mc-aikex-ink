@@ -22,6 +22,7 @@ const { RoomBoss, CollisionWorld } = await import('./room-boss.mjs');
 const { RoomTerrain } = await import('./room-terrain.mjs');
 const { isNukeCode, sanitizeChat } = await import('./room-chat.mjs');
 const { resolveNuke } = await import('./room-nuke.mjs');
+const { resetRoomTerrain,nextHost } = await import('./room-authority.mjs');
 const { getFoodHeal } = await import('../js/items.js');
 const PORT = Number(process.env.PORT || 3040);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -116,6 +117,7 @@ class Room {
     this.seed = SEED;
     this.title = title;
     this.hostName = hostName;
+    this.hostId=null;
     this.terrain = new RoomTerrain(MAX_EDITS);
     this.edits = this.terrain.getEdits();
     this.terrainRevision = 0;
@@ -327,17 +329,20 @@ function leaveRoom(ws) {
   const peer = ws._peer;
   if (!peer || !peer.room) return;
   const room = peer.room;
-  const wasHost = peer.name === room.hostName;
+  const wasHost = peer.id === room.hostId;
   room.peers.delete(ws);
   room.broadcast({ t: 'bye', id: peer.id });
   peer.room = null;
   if (room.peers.size === 0) {
+    room.hostId=null;
     room.emptyAt = Date.now();
     console.log(`[mc-ws] room ${room.code} empty, grace ${EMPTY_GRACE_MS / 1000}s`);
     schedulePersist();
   } else if (wasHost) {
     const next = room.peers.values().next().value;
     if (next) room.hostName = next.name;
+    room.hostId=nextHost(room.peers);
+    room.broadcast({t:'host',hostId:room.hostId});
     schedulePersist();
   }
 }
@@ -370,7 +375,9 @@ function joinRoom(ws, room, name) {
   combat.init(peer);
   ws._peer = peer;
   room.peers.set(ws, peer);
+  if(!room.hostId){room.hostId=id;room.hostName=peer.name;}
   room.touch();
+  room.broadcast({t:'host',hostId:room.hostId});
   console.log(`[mc-ws] join ${room.code} as ${peer.name} (${room.peers.size}/${MAX_PLAYERS})`);
 
   send(ws, {
@@ -712,6 +719,11 @@ wss.on('connection', (ws) => {
       }
       room.broadcast({t:'chat',by:peer.name,text});return;
     }
+    if (msg.t === 'terrain_reset') {
+      if(!resetRoomTerrain(room,peer)){send(ws,{t:'err',msg:'仅房主可重置地形'});return;}
+      room.broadcast({t:'terrain_reset',revision:room.terrainRevision,editsByDimension:room.terrain.toJSON()});
+      return;
+    }
     if (msg.t === 'sync') {
       send(ws, room.snapshotFor(ws));
       return;
@@ -850,7 +862,7 @@ wss.on('connection', (ws) => {
 
     if (msg.t === 'name') {
       peer.name = String(msg.name || peer.name).slice(0, 12);
-      if (room.hostName === peer.name || room.peers.size === 1) room.hostName = peer.name;
+      if (room.hostId === peer.id) room.hostName = peer.name;
       room.broadcast({
         t: 'peer', id: peer.id, name: peer.name, color: peer.color,
         x: peer.x, y: peer.y, z: peer.z, yaw: peer.yaw, pitch: peer.pitch,

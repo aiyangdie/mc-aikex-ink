@@ -96,7 +96,7 @@ export class NetClient {
       this._emit('sync', msg);
       return;
     }
-    if (['boss','vitals','respawned','combat','shot','fireball','fire','chat','nuke','terrain_reset'].includes(msg.t)) this._emit(msg.t, msg);
+    if (['boss','vitals','respawned','combat','shot','fireball','fire','chat','nuke','terrain_reset','host'].includes(msg.t)) this._emit(msg.t, msg);
     else if (msg.t === 'block') this._emit('block', msg);
     else if (msg.t === 'move') this._emit('move', msg);
     else if (msg.t === 'peer') this._emit('peer', msg);
