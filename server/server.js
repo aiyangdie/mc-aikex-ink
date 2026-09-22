@@ -761,7 +761,7 @@ wss.on('connection', (ws) => {
 
       if (!shot) return;
       if (Number.isFinite(bossDistance) && !shot.target && shot.distance >= bossDistance) {
-        room.boss.combat.takeDamage(5); room.touch();
+        room.boss.combat.takeDamage(5); if(room.boss.combat.dead)room.boss.kill(Date.now()); room.touch();
         room.broadcast({t:'boss',boss:room.boss.snapshot()});
       }
       room.broadcast({ t: 'shot', by: peer.id, dimension: peer.dimension,
@@ -888,6 +888,7 @@ setInterval(() => {
   bossTick++;
   for (const room of rooms.values()) {
     if (!room.peers.size) continue;
+    if(room.boss.maybeRespawn(Date.now())) {room.touch();room.broadcast({t:'boss',boss:room.boss.snapshot()});}
     const events=room.boss.tick(.05,[...room.peers.values()]);
     for (const event of events) {
       for (const [ws,peer] of room.peers) if (peer.id===event.id) {

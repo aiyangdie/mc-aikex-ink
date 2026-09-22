@@ -48,3 +48,13 @@ test('AK ray can hit Boss but not through world terrain or from another dimensio
  const wall={getBlock:(x,y,z)=>y<=18||(z===5&&y<=22)?3:0};
  assert.equal(new RoomBoss(wall,{x:0,y:19,z:0}).rayDistance(p,shot),Infinity);
 });
+test('dead Boss revives after 60 seconds, including after snapshot restart',()=>{
+ const b=new RoomBoss(flat,{x:0,y:19,z:0});
+ b.kill(1000);
+ assert.equal(b.hp,0);assert.equal(b.snapshot().respawnAt,61000);
+ const restarted=new RoomBoss(flat,b.snapshot());
+ assert.equal(restarted.maybeRespawn(60999),false);
+ assert.equal(restarted.maybeRespawn(61000),true);
+ assert.equal(restarted.hp,1500);assert.equal(restarted.snapshot().respawnAt,null);
+ assert.equal(restarted.maybeRespawn(61001),false);
+});

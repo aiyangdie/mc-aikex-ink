@@ -24,6 +24,7 @@ import { buildStructure } from './structures.js?v=mistboss3';
 
 import { apiUrl } from './config.js';
 import { MistBoss } from './mist-boss.js';
+import { shouldReviveSoloBoss } from './boss-respawn.js';
 import { findStandY } from './boss-navigation.js';
 
 /* ============================================
@@ -1505,6 +1506,7 @@ export class Game {
       this._mistBossState = robot.toJSON();
       this._dirtySinceSave = true;
       if (robot.dead) {
+        this._mistBossState={...this._mistBossState,respawnAt:Date.now()+60_000};
         robot.dispose();
         this._mistBoss = null;
         this._showSaveToast('迷雾档案 Boss 已击败！');
@@ -1691,7 +1693,11 @@ export class Game {
   /** Solo only: keep the new Boss out of the server's unsynchronized mob list. */
   async _ensureMistBoss() {
     if (this._online) { this._syncOnlineBoss(this._netBossState); return; }
-    if (this.dimension !== Dim.OVERWORLD || this._mistBoss || this._mistBossState?.hp === 0) return;
+    if (this.dimension !== Dim.OVERWORLD || this._mistBoss) return;
+    if (this._mistBossState?.hp === 0) {
+      if (!shouldReviveSoloBoss(this._mistBossState)) return;
+      this._mistBossState=null;this._persist('boss-respawn');
+    }
     const p = this.player.position;
     let spawn = this._mistBossState;
     if (!spawn || ![spawn.x,spawn.y,spawn.z].every(Number.isFinite)) {
@@ -2899,6 +2905,7 @@ export class Game {
       if (!this._online && this.player.hp <= 0) this._showDeathScreen();
     }
 
+    if (!this._online && !this._mistBoss && shouldReviveSoloBoss(this._mistBossState) && this.isRunning) this._ensureMistBoss();
     if (this._online && this._mistBoss) this._mistBoss.update(dt,this.player);
     this.combat?.tick(dt);
     if (this.player) this.player._armedLook = !!this.combat?.armed;
