@@ -77,3 +77,16 @@ MIT — 见 [LICENSE](LICENSE)
 服务器控制 PvP 伤害、射速、最近玩家命中、死亡与重生。地形遮挡距离、玩家移动和环境生命值变化仍来自客户端；这不是完整的反作弊系统，修改客户端可以伪造这些数据。服务器尚未模拟体素地形或验证食物消耗。
 
 鼠标锁定兼容：若浏览器拒绝 Pointer Lock，自动使用 WASD 移动、按住右键拖动视角、左键攻击的兼容模式；右键单击仍可放置，Esc 暂停，失焦清空按键。内置浏览器已实测移动、AK 显示、暂停和继续。
+
+
+## 迷雾档案 Boss
+
+- 原主人公 GLB 和骨骼直接移植，1500 HP，保留目前人物朝向；走近追击，每刀 5 点伤害，可近战或 AK 攻击。
+- 单机保存 Boss 剩余血量/击败状态；联机每房间共享一个 Boss，服务器决定追击、命中和血量。击败后重进房间不会重新刷满，新房间生成新 Boss。
+- 被 Boss 击败后显示死亡页，点击「重新站起来」满血复活并获 3 秒保护。原 PvP 枪击阵亡的自动随机复活逻辑保持独立。
+- 简单地面追踪支持一步台阶、墙体和悬崖检测，不是完整迷宫寻路。联机 Boss 的碰撞读取真实体素与房间编辑，但原玩家移动、背包和 PvP 协议仍非完整反作弊。
+- 模型授权来源说明见 `assets/models/README.md`；Three.js 固定版本随仓库提供，浏览器不依赖外部 CDN。
+
+验证：根目录 `npm ci --ignore-scripts`、`npm test`；`npm ci --prefix server`、`npm test --prefix server`。
+联调：启动 `node server/server.js` 后运行根目录 `npm run dev`，打开 `http://127.0.0.1:8086`。
+浏览器回归：上述两个本地服务启动后运行 `node scripts/verify-boss-browser.mjs`（需要 Playwright Chromium）；截图存 `docs/verification/`。

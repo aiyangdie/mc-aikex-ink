@@ -64,6 +64,7 @@ class Player {
     this._bob = 0;
     this._landPunch = 0;
     this._sprinting = false;
+    this.knockVelocity = new THREE.Vector3(0, 0, 0);
 
     // 交互参数
     this.reachDistance = 7;
@@ -135,9 +136,19 @@ class Player {
     this._sprinting = wantSprint && this.onGround && moveDir.lengthSq() > 0;
     const speed = this.moveSpeed * (this._sprinting ? this.sprintMul : 1) * (this.adminFly ? 1.8 : 1);
 
-    // 水平移动
-    this.velocity.x = moveDir.x * speed;
-    this.velocity.z = moveDir.z * speed;
+    // 水平移动 + 击退
+    this.velocity.x = moveDir.x * speed + this.knockVelocity.x;
+    this.velocity.z = moveDir.z * speed + this.knockVelocity.z;
+    if (this.knockVelocity.y !== 0 && !this.adminFly) {
+      this.velocity.y += this.knockVelocity.y;
+      this.knockVelocity.y = 0;
+    }
+    this.knockVelocity.x *= Math.exp(-dt * 6);
+    this.knockVelocity.z *= Math.exp(-dt * 6);
+    if (Math.hypot(this.knockVelocity.x, this.knockVelocity.z) < 0.05) {
+      this.knockVelocity.x = 0;
+      this.knockVelocity.z = 0;
+    }
 
     // 管理飞行：空格上升，Shift 下降，无重力
     if (this.adminFly) {
@@ -2082,7 +2093,7 @@ export class Game {
       if (this.combat) this.combat.lastHp = this.player.hp;
       if (msg.cause) this._lastDamageBy = msg.cause;
       this._updateHpHud();
-      if (this.player.hp <= 0) this._showDeathScreen();
+      if (this.player.hp <= 0 && msg.cause === 'mist-boss') this._showDeathScreen();
     });
     this.net.on('respawned', async msg => {
       if (!this._online || !this._dead) return;
@@ -2866,7 +2877,7 @@ export class Game {
     }
 
     if (this._online && this._mistBoss) this._mistBoss.update(dt,this.player);
-    this.combat?.tick();
+    this.combat?.tick(dt);
     if (this.player) this.player._armedLook = !!this.combat?.armed;
     this._tickFov(dt);
     if (this.remotes) this.remotes.update(dt, this.camera, this.dimension);

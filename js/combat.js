@@ -1,8 +1,10 @@
 import * as THREE from 'three';
 import { isSolid } from './voxel.js?v=mistboss2';
+import { CombatPhysics, pickRandomSpawn } from './physics.js?v=mistboss2';
 
 /**
- * AK 对战：后坐力、枪口火光、弹道、命中反馈；单机可打生物
+ * AK：联机打玩家；单机/联机本地弹道可打动物（PvE）
+ * 子弹有重力与碰撞；命中击退；复活随机点
  */
 export class Combat {
   constructor(game) {
@@ -15,7 +17,7 @@ export class Combat {
     this.traces = [];
     this._spread = 0;
     this._hitUntil = 0;
-    this._killUntil = 0;
+    this.physics = new CombatPhysics(game);
 
     this.panel = document.createElement('div');
     this.panel.id = 'combatHud';
@@ -108,9 +110,7 @@ export class Combat {
     const g = this.game;
     if (msg.id !== g.net.id) {
       g.remotes.upsert(msg);
-      if (msg.by === g.net.id && msg.hp != null) {
-        this._flashHit(msg.hp <= 0);
-      }
+      if (msg.by === g.net.id && msg.hp != null) this._flashHit(msg.hp <= 0);
       return;
     }
     if (msg.hp < g.player.hp) {
@@ -118,6 +118,11 @@ export class Combat {
       setTimeout(() => document.body.classList.remove('combat-hurt'), 220);
       g.player.addShake?.(0.04);
       g.player.viewKickP -= 0.02;
+      if (msg.kx != null) {
+        g.player.knockVelocity.x += msg.kx;
+        g.player.knockVelocity.y += msg.ky || 3.2;
+        g.player.knockVelocity.z += msg.kz;
+      }
     }
     g.player.hp = msg.hp;
     this.lastHp = msg.hp;
@@ -132,19 +137,21 @@ export class Combat {
       const reset = () => {
         g.player.position.set(msg.x, msg.y, msg.z);
         g.player.velocity.set(0, 0, 0);
+        g.player.knockVelocity.set(0, 0, 0);
         g.player._fallVy = 0;
         g.player.invuln = 3;
         g.player._wasOnGround = true;
+        g._showSaveToast?.(`复活 @ ${msg.x.toFixed?.(0) ?? msg.x}, ${msg.z.toFixed?.(0) ?? msg.z}`);
       };
-      if (g.dimension !== msg.dimension) g._switchDimension(msg.dimension).then(reset);
-      else reset();
+      if (msg.dimension && g.dimension !== msg.dimension) {
+        g._switchDimension(msg.dimension).then(reset);
+      } else reset();
     }
     g._updateHpHud();
   }
 
   _flashHit(kill) {
     this._hitUntil = performance.now() + (kill ? 280 : 120);
-    this._killUntil = kill ? performance.now() + 400 : this._killUntil;
     this.hitMark.classList.toggle('kill', !!kill);
     this.hitMark.classList.add('show');
   }
@@ -157,7 +164,6 @@ export class Combat {
     this.nextShot = now + 105;
 
     const p = g.player;
-    // 后坐力 + 散射（连射越开越散）
     const spread = 0.008 + this._spread * 0.018;
     p.viewKickP += 0.028 + Math.random() * 0.012;
     p.viewKickY += (Math.random() - 0.5) * 0.024;
@@ -165,7 +171,6 @@ export class Combat {
     this._spread = Math.min(1, this._spread + 0.12);
 
     const dir = g.camera.getWorldDirection(new THREE.Vector3());
-    // 轻微散射
     dir.x += (Math.random() - 0.5) * spread;
     dir.y += (Math.random() - 0.5) * spread * 0.7;
     dir.z += (Math.random() - 0.5) * spread;
@@ -183,59 +188,50 @@ export class Combat {
       }
     }
 
-    // 枪模型后坐
     this.gun.position.z = this._gunBase.z + 0.07;
     this.gun.rotation.x = -0.08;
     this.muzzle.material.opacity = 0.95;
     this.muzzle.scale.setScalar(1.6);
 
-    if (g._online && g.net?.room) {
+    const online = !!(g._online && g.net?.room);
+
+    // 物理弹道：打动物 / 打龙（联机也开，PvE）；联机打玩家仍走服务器判定
+    this.physics.fire(origin, dir.clone(), {
+      online: false, // 本地弹道负责生物
+      damage: 5,
+      onHit: ({ target, dir: hitDir, damage }) => this._onBulletHit(target, hitDir, damage),
+    });
+
+    if (online) {
       g.net._send({ t: 'shoot', direction: [dir.x, dir.y, dir.z], distance });
-    } else {
-      this._offlineHit(origin, dir, distance);
-      this.trace({
-        origin: [origin.x, origin.y, origin.z],
-        direction: [dir.x, dir.y, dir.z],
-        distance,
-        dimension: g.dimension,
-      });
     }
+
+    // 短曳光（表现）
+    this.trace({
+      origin: [origin.x, origin.y, origin.z],
+      direction: [dir.x, dir.y, dir.z],
+      distance: Math.min(distance, 40),
+      dimension: g.dimension,
+    });
   }
 
-  _offlineHit(origin, dir, maxDist) {
+  _onBulletHit(target, dir, damage) {
     const g = this.game;
-    let best = null;
-    let bestT = maxDist;
-    if (g.animalManager) {
-      const hit = g.animalManager.raycast(origin, dir, maxDist);
-      if (hit && hit.dist < bestT) {
-        bestT = hit.dist;
-        best = hit.robot;
-      }
+    if (!target) return;
+    if (target === g._mistBoss) {
+      if (!g._online) g._attackMob(target); // online shot damage is server owned
+      this._flashHit(target.dead); return;
     }
-    if (g._dragon && !g._dragon.dead) {
-      const t = g._dragon.hitDistance(origin, dir, maxDist);
-      if (t < bestT) {
-        bestT = t;
-        best = g._dragon;
-      }
-    }
-    if (g._mistBoss && !g._mistBoss.dead) {
-      const t = g._mistBoss.hitDistance(origin, dir, maxDist);
-      if (t < bestT) { bestT = t; best = g._mistBoss; }
-    }
-    if (!best) return;
-    if (best === g._mistBoss) {
-      g._attackMob(best); this._flashHit(best.dead); return;
-    }
-    const result = best.takeDamage?.(5);
+    const result = target.takeDamage?.(damage, dir, 8);
     this._flashHit(!!result?.dead);
-    if (best === g._dragon && result?.dead) g._onDragonDefeated?.();
+    if (target === g._dragon && result?.dead) g._onDragonDefeated?.();
     else if (result?.dead && result.drops) {
       for (const d of result.drops) g.inventory.add(d, 1);
       g._updateHotbar();
-    } else if (best.hp != null) {
-      g._showSaveToast?.(`${best.kind || '目标'} ${Math.max(0, best.hp)} HP`);
+      g._showSaveToast?.(`猎到 ${target.def?.name || target.kind || '猎物'}`);
+    } else if (target.hp != null) {
+      const name = target.def?.name || target.kind || '目标';
+      g._showSaveToast?.(`${name} ${Math.max(0, target.hp)} HP`);
     }
   }
 
@@ -247,21 +243,37 @@ export class Combat {
     const mat = new THREE.LineBasicMaterial({
       color: 0xffc107,
       transparent: true,
-      opacity: 0.85,
+      opacity: 0.7,
     });
     const line = new THREE.Line(geo, mat);
     this.game.scene.add(line);
-    this.traces.push({ line, mat, until: performance.now() + 70 });
+    this.traces.push({ line, mat, until: performance.now() + 60 });
   }
 
-  tick() {
+  _doLocalRespawn() {
+    const g = this.game;
+    const spot = pickRandomSpawn(g.world, g.dimension);
+    this.receive({
+      id: g.net.id,
+      hp: 20,
+      respawn: true,
+      x: spot.x,
+      y: spot.y,
+      z: spot.z,
+      dimension: spot.dimension || g.dimension,
+    });
+    this.deadUntil = 0;
+  }
+
+  tick(dt = 0.016) {
     const g = this.game;
     const active = g._controlsActive();
+
+    this.physics.tick(dt);
 
     this.panel.style.display = active ? 'flex' : 'none';
     this.gun.visible = active && this.armed && g.player.hp > 0;
 
-    // 枪复位
     this.gun.position.z += (this._gunBase.z - this.gun.position.z) * 0.28;
     this.gun.rotation.x *= 0.75;
     if (this.muzzle.material.opacity > 0) {
@@ -269,13 +281,10 @@ export class Combat {
       this.muzzle.scale.multiplyScalar(0.85);
     }
 
-    // 未射击时散射回收
     if (!this.held) this._spread = Math.max(0, this._spread - 0.025);
 
-    const now = performance.now();
-    if (now > this._hitUntil) this.hitMark.classList.remove('show', 'kill');
+    if (performance.now() > this._hitUntil) this.hitMark.classList.remove('show', 'kill');
 
-    // 准星扩散视觉
     const cross = document.getElementById('crosshair');
     if (cross) {
       const s = 1 + this._spread * 0.8;
@@ -284,11 +293,10 @@ export class Combat {
 
     this.status.textContent =
       g.player.hp <= 0
-        ? `已阵亡 · ${Math.max(1, Math.ceil((this.deadUntil - Date.now()) / 1000))} 秒后重生`
+        ? `已阵亡 · ${Math.max(1, Math.ceil((this.deadUntil - Date.now()) / 1000))} 秒后随机复活`
         : this.armed
-          ? 'AK · 按住开火 · Shift 冲刺 · Q 收枪'
-          : 'Q 装备 AK · 可对战 / 打怪';
-    if (g._fallbackActive) this.status.textContent += ' · 右键拖视角';
+          ? 'AK · 可打动物/玩家 · 有击退 · Q 收枪'
+          : 'Q 装备 AK · 子弹带物理 · 复活随机点';
 
     if (!active) this.held = false;
     if (active && this.held) this.shoot();
@@ -303,19 +311,7 @@ export class Combat {
         this.deadUntil = Date.now() + 3000;
         this.held = false;
       }
-      if (Date.now() >= this.deadUntil) {
-        const sp = g._starterPortalPos;
-        this.receive({
-          id: g.net.id,
-          hp: 20,
-          respawn: true,
-          x: sp?.x ?? 7.5,
-          y: (sp?.y ?? 19),
-          z: (sp?.z ?? 4) + 3.5,
-          dimension: 'overworld',
-        });
-        this.deadUntil = 0;
-      }
+      if (Date.now() >= this.deadUntil) this._doLocalRespawn();
     }
 
     for (let i = this.traces.length - 1; i >= 0; i--) {

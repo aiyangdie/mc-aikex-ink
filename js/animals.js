@@ -40,6 +40,7 @@ class Critter {
     this.world = world;
     this.id = opts.id || nextLocalId();
     this.position = new THREE.Vector3(x, y, z);
+    this.knockVelocity = new THREE.Vector3(0, 0, 0);
     this.rotation = opts.yaw != null ? opts.yaw : randRange(0, Math.PI * 2);
     this.targetRotation = this.rotation;
     this.collisionWidth = def.w;
@@ -131,13 +132,24 @@ class Critter {
     return tmin >= 0 ? tmin : Infinity;
   }
 
-  takeDamage(amount = 3) {
+  takeDamage(amount = 3, knockDir = null, knockStr = 7) {
     if (this.dead) return null;
     this.hp -= amount;
     this.hurtTimer = 0.35;
     this.state = 'flee';
-    this.stateTimer = 1.6;
-    this.targetRotation += Math.PI + randRange(-0.5, 0.5);
+    this.stateTimer = 1.8;
+    if (knockDir) {
+      const d = knockDir.clone ? knockDir.clone() : new THREE.Vector3(knockDir.x, knockDir.y, knockDir.z);
+      d.y = 0;
+      if (d.lengthSq() < 1e-6) d.set(Math.cos(this.rotation), 0, Math.sin(this.rotation));
+      else d.normalize();
+      this.knockVelocity.x += d.x * knockStr;
+      this.knockVelocity.y += 3.5;
+      this.knockVelocity.z += d.z * knockStr;
+      this.targetRotation = Math.atan2(d.z, d.x) + Math.PI;
+    } else {
+      this.targetRotation += Math.PI + randRange(-0.5, 0.5);
+    }
     if (this.hp <= 0) {
       this.hp = 0;
       this.dead = true;
@@ -166,6 +178,29 @@ class Critter {
       }
     }
     if (this._netDriven) return;
+
+    // 击退物理：冲量 + 落地摩擦
+    if (this.knockVelocity.lengthSq() > 0.01) {
+      this.knockVelocity.y -= 22 * dt;
+      const nx = this.position.x + this.knockVelocity.x * dt;
+      const ny = this.position.y + this.knockVelocity.y * dt;
+      const nz = this.position.z + this.knockVelocity.z * dt;
+      const gy = this._getGroundY(nx, nz);
+      if (ny <= gy) {
+        this.position.set(nx, gy, nz);
+        this.knockVelocity.y = 0;
+        this.knockVelocity.x *= 0.55;
+        this.knockVelocity.z *= 0.55;
+      } else {
+        this.position.set(nx, ny, nz);
+      }
+      this.knockVelocity.x *= Math.exp(-dt * 3);
+      this.knockVelocity.z *= Math.exp(-dt * 3);
+      if (this.knockVelocity.lengthSq() < 0.05) this.knockVelocity.set(0, 0, 0);
+      this.group.position.set(this.position.x, this.position.y, this.position.z);
+      this.group.rotation.y = this.rotation;
+      return; // 击退中暂停 AI 步进
+    }
 
     this.stateTimer -= dt;
     this.bobPhase += dt * (this.state === 'idle' ? 2 : 6);

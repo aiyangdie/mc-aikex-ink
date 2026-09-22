@@ -16,8 +16,17 @@ test('nearest player, damage, fire rate, death, respawn and protection', () => {
   assert.equal(combat.shoot(b, peers, aim, 1500), null);
   assert.equal(combat.respawn(b, 4389), false);
   assert.equal(combat.respawn(b, 4390), true); assert.equal(b.hp, 20);
-  assert.equal(combat.hurt(b, 5, 4400), false);
-  assert.equal(combat.hurt(b, 5, 6400), true);
+  assert.ok(Number.isFinite(b.x) && Number.isFinite(b.z));
+  // 随机复活：连刷多次不应全是同一点
+  const spots = new Set();
+  for (let i = 0; i < 20; i++) {
+    b.hp = 0; b.deadUntil = 0;
+    combat.respawn(b, 10000 + i);
+    spots.add(`${b.x},${b.z}`);
+  }
+  assert.ok(spots.size >= 5, `expected varied spawns, got ${spots.size}`);
+  assert.equal(combat.hurt(b, 5, b.protectedUntil - 1), false);
+  assert.equal(combat.hurt(b, 5, b.protectedUntil), true);
 });
 test('misses, terrain occlusion distance, dimensions and invalid input', () => {
   const a = player('a', 0), b = player('b', -10);

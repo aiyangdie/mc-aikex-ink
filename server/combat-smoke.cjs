@@ -45,7 +45,7 @@ async function run() {
     assert.equal(snapshot.self.hp, 0); assert.equal(snapshot.self.x, 0);
     assert.equal(snapshot.players[0].hp, 20);
     const reborn = await b.wait(m => m.t === 'combat' && m.respawn);
-    assert.equal(reborn.hp, 20); assert.equal(reborn.y, 19.2);
+    assert.equal(reborn.hp, 20); assert.equal(reborn.y, 19.5);
     a.send({ t: 'move', x: reborn.x, y: reborn.y, z: reborn.z + 10, yaw: 0, pitch: 0, dimension: 'overworld' });
     await delay(80);
     a.send({ t: 'shoot', direction: [0, 0, -1], distance: 80 });

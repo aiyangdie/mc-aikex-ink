@@ -31,3 +31,10 @@ test('respawn restores full HP, clears movement and gives grace period',()=>{
   assert.equal(g.player.position.x,5);assert.equal(g.player.velocity.length(),0);
   assert.equal(g.player.invuln,3);assert.equal(element('deathScreen').hidden,true);
 });
+test('non-Boss zero-HP vitals cannot trap PvP auto-respawn in manual death screen',()=>{
+ const g=setup(),handlers={};g._online=true;
+ g.net={on:(name,fn)=>handlers[name]=fn,_send(){}};
+ g._bindNet();
+ handlers.vitals({hp:0});assert.equal(g._dead,false);
+ handlers.vitals({hp:0,cause:'mist-boss'});assert.equal(g._dead,true);
+});
