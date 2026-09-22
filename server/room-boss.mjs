@@ -34,7 +34,8 @@ export class RoomBoss {
     this.world=world;
     this.position={x:saved.x,y:saved.y,z:saved.z};
     this.spawnPosition={...(saved.spawnPosition || this.position)};
-    this.respawnAt=Number.isFinite(saved.respawnAt)?saved.respawnAt:null;
+    this.respawnAt=Number.isFinite(saved.respawnAt)?saved.respawnAt:
+      saved.hp===0?Date.now()+60_000:null;
     this.combat=new BossCombat(saved.hp);
     this.yaw=saved.yaw||0;
     this.attackId=0;

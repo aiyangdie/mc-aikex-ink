@@ -320,7 +320,7 @@ export class Combat {
             ? `AK · ${blinkTxt} · Q切法师 · B建造`
             : `建造 · ${blinkTxt} · Q开战 · 右键炸弹`;
 
-    if (g._fallbackActive) this.status.textContent += ' · WASD 移动 / 右键拖动视角 / Esc 暂停';
+    if (g._fallbackActive) this.status.textContent += ' · WASD 移动 / 鼠标视角 / Esc 暂停';
     if (!active) this.held = false;
     if (active && this.held) this.shoot();
 

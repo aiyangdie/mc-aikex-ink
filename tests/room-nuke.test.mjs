@@ -12,7 +12,7 @@ function fixture(limit=60000){
 test('nuke spares caster, kills all other room players and creatures and Boss',()=>{
  const {caster,victim,outsider,room,terrain}=fixture();
  const event=resolveNuke(room,caster,10000);
- assert.equal(caster.hp,20);assert.equal(victim.hp,0);assert.equal(victim.manualRespawn,true);
+ assert.equal(caster.hp,20);assert.equal(caster.protectedUntil,13000);assert.equal(victim.hp,0);assert.equal(victim.manualRespawn,true);
  assert.equal(outsider.hp,20);assert.equal(room.mobs.size,0);
  assert.equal(room.boss.hp,0);assert.equal(room.boss.respawnAt,70000);
  assert.equal(event.dimension,'overworld');assert.ok(event.edits.length>0);

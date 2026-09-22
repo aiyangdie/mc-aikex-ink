@@ -17,8 +17,9 @@ export function resolveNuke(room,caster,now=Date.now()){
  const edits=craterCells(origin);
  if(!edits.length||!room.terrain.applyBatch(edits,dimension))return null;
  room.lastNukeAt=now;room.terrainRevision++;
+ caster.protectedUntil=Math.max(caster.protectedUntil||0,now+3000);
  for(const peer of room.peers.values())if(peer!==caster){peer.hp=0;peer.manualRespawn=true;peer.deadUntil=0;}
  for(const mob of room.mobs.values()){mob.alive=false;mob.hp=0;}
- room.mobs.clear();room.boss.kill(now);room.touch();
+ room.mobs.clear();room.dragonKilled=true;room.boss.kill(now);room.touch();
  return {casterId:caster.id,dimension,origin,sequence:room.terrainRevision,edits};
 }

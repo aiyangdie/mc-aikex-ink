@@ -6,3 +6,7 @@ test('solo boss returns 60 seconds after defeat even if game was closed',()=>{
  assert.equal(shouldReviveSoloBoss({hp:0,respawnAt:61000},61000),true);
  assert.equal(shouldReviveSoloBoss({hp:1500,respawnAt:null},61000),false);
 });
+test('legacy defeated solo Boss starts a fresh 60-second clock instead of remaining permanently dead',async()=>{
+ const {scheduleSoloRespawn}=await import('../js/boss-respawn.js');
+ assert.deepEqual(scheduleSoloRespawn({hp:0,x:1,y:2,z:3},1000),{hp:0,x:1,y:2,z:3,respawnAt:61000});
+});

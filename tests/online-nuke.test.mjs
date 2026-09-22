@@ -13,7 +13,7 @@ test('two rooms: authoritative nuke and reset are scoped and persistent', {timeo
  const reservation=net.createServer();await new Promise(r=>reservation.listen(0,'127.0.0.1',r));
  const port=reservation.address().port;await new Promise(r=>reservation.close(r));
  const dir=await mkdtemp(tmpdir()+'/mc-room-nuke-');
- const child=spawn(process.execPath,['server/server.js'],{cwd:new URL('../',import.meta.url),env:{...process.env,PORT:String(port),HOST:'127.0.0.1',MC_DATA_DIR:dir,MC_OWNER_KEY:'test-only-owner'}});
+ let child=spawn(process.execPath,['server/server.js'],{cwd:new URL('../',import.meta.url),env:{...process.env,PORT:String(port),HOST:'127.0.0.1',MC_DATA_DIR:dir,MC_OWNER_KEY:'test-only-owner'}});
  let logs='';child.stdout.on('data',b=>logs+=b);child.stderr.on('data',b=>logs+=b);
  t.after(async()=>{if(child.exitCode===null){child.kill('SIGTERM');await new Promise(r=>child.once('exit',r));}await rm(dir,{recursive:true,force:true});});
  for(let i=0;i<100&&!logs.includes('http://');i++)await delay(25);assert.match(logs,/http:\/\//,logs);
@@ -31,6 +31,7 @@ test('two rooms: authoritative nuke and reset are scoped and persistent', {timeo
  const afterA=await caster.wait(m=>m.t==='sync'),afterB=await victim.wait(m=>m.t==='sync'),afterC=await outsider.wait(m=>m.t==='sync');
  assert.equal(afterA.self.hp,20);assert.equal(afterB.self.hp,0);assert.equal(afterC.self.hp,20);
  assert.equal(afterA.boss.hp,0);assert.ok(afterA.boss.respawnAt>Date.now());
+ assert.equal(afterA.dragonKilled,true);
  assert.ok(afterA.editsByDimension.overworld.length>0);assert.deepEqual(afterA.editsByDimension.nether,[]);
  victim.send({t:'terrain_reset'});await delay(200);victim.send({t:'sync'});
  assert.ok((await victim.wait(m=>m.t==='sync')).editsByDimension.overworld.length>0);

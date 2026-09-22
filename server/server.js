@@ -122,6 +122,7 @@ class Room {
     this.edits = this.terrain.getEdits();
     this.terrainRevision = 0;
     this.lastNukeAt=0;
+    this.dragonKilled=false;
     this.peers = new Map();
     this.mobs = new Map();
     this.spells = new Spells();
@@ -208,7 +209,7 @@ class Room {
       title: this.title,
       seed: this.seed,
       edits: this.editsArray(),
-      hostId:this.hostId||null,editsByDimension:this.terrain.toJSON(),terrainRevision:this.terrainRevision,lastNukeAt:this.lastNukeAt,
+      hostId:this.hostId||null,editsByDimension:this.terrain.toJSON(),terrainRevision:this.terrainRevision,lastNukeAt:this.lastNukeAt,dragonKilled:this.dragonKilled,
       players: this.playersList(ws),
       playersCount: this.peers.size,
       mobs: this.mobsArray(),
@@ -250,7 +251,7 @@ class Room {
       hostName: this.hostName,
       boss: this.boss.snapshot(),
       seed: this.seed,
-      edits: this.editsArray(),editsByDimension:this.terrain.toJSON(),terrainRevision:this.terrainRevision,lastNukeAt:this.lastNukeAt,
+      edits: this.editsArray(),editsByDimension:this.terrain.toJSON(),terrainRevision:this.terrainRevision,lastNukeAt:this.lastNukeAt,dragonKilled:this.dragonKilled,
       createdAt: this.createdAt,
       lastActive: this.lastActive,
     };
@@ -265,6 +266,7 @@ class Room {
     room.edits=room.terrain.getEdits();
     room.terrainRevision=Number.isSafeInteger(row.terrainRevision)?row.terrainRevision:0;
     room.lastNukeAt=Number.isFinite(row.lastNukeAt)?row.lastNukeAt:0;
+    room.dragonKilled=row.dragonKilled===true;
     room.collision = new CollisionWorld(room.seed, room.edits);
     room.boss = new RoomBoss(room.collision, row.boss || undefined);
     room.emptyAt = Date.now(); // 重启后无人，走宽限
@@ -393,7 +395,7 @@ function joinRoom(ws, room, name) {
     seed: room.seed,
     color,
     edits: room.editsArray(),
-    hostId:room.hostId||null,editsByDimension:room.terrain.toJSON(),terrainRevision:room.terrainRevision,lastNukeAt:room.lastNukeAt,
+    hostId:room.hostId||null,editsByDimension:room.terrain.toJSON(),terrainRevision:room.terrainRevision,lastNukeAt:room.lastNukeAt,dragonKilled:room.dragonKilled,
     players: room.playersList(ws),
     mobs: room.mobsArray(),
   });
@@ -565,7 +567,7 @@ wss.on('connection', (ws) => {
       let role = ws._adminRole || resolveRole(key, ws._peer?.name || '');
       // 房主对本房有限权限：刷怪
       if (!role && ws._peer?.room && msg.cmd === 'spawn'
-          && ws._peer.name === ws._peer.room.hostName) {
+          && ws._peer.id === ws._peer.room.hostId) {
         role = 'admin';
       }
       if (!role) {
