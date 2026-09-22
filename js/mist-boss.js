@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { BossCombat } from './boss-combat.js';
-import { findStandY, hasLineOfSight } from './boss-navigation.js';
+import { findStandY, findGroundStep, hasLineOfSight } from './boss-navigation.js';
 
 /** The original Mist Archives heroine rig, with an added local sword animation. */
 export class MistBoss {
@@ -170,13 +170,8 @@ export class MistBoss {
       visible,playerAlive:player.hp>0,invulnerable:player.invuln>0});
     if (visible && distance > .01 && this.combat.state !== 'attack') this.group.rotation.y = Math.atan2(dx,dz);
     if (result.move) {
-      const angle = Math.atan2(dx,dz), step = 3.4*dt;
-      // Try direct pursuit, then a small side step. This is not full maze pathfinding.
-      for (const offset of [0,.65,-.65,1.2,-1.2]) {
-        const x=this.position.x+Math.sin(angle+offset)*step, z=this.position.z+Math.cos(angle+offset)*step;
-        const y=findStandY(this.world,x,z,this.position.y);
-        if (y !== null) { this.position.set(x,y,z); break; }
-      }
+      const step = findGroundStep(this.world, this.position, player.position, { step: 3.4 * dt, maxStep: 1.05 });
+      if (step) this.position.set(step.x, step.y, step.z);
     }
     if (result.attackStarted) {
       this.group.rotation.y = Math.atan2(dx,dz);
