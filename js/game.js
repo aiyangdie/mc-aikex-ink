@@ -776,6 +776,8 @@ export class Game {
     this.remotes = null;
     this._netApplying = false;
     this._online = false;
+    this._terrainRevision = 0;
+    this._roomHostId = null;
     this._hostWaiting = false; // 已建房、仍在大厅等待
     this._pendingJoinMsg = null;
     this._roomPollTimer = null;
@@ -2130,7 +2132,13 @@ export class Game {
     this.net.on('fire', msg => this.combat?.mage.receive(msg));
 
     this.net.on('block', (msg) => {
-      if (msg.by === this.net.id) return;
+      if(Number.isSafeInteger(msg.revision) && msg.revision<=this._terrainRevision)return;
+      if(Number.isSafeInteger(msg.revision))this._terrainRevision=msg.revision;
+      const dim=msg.dimension||Dim.OVERWORLD;
+      if(msg.by === this.net.id)return;
+      const edits=this._dimEdits[dim];
+      if(!edits)return;
+      if(dim !== this.dimension){edits.set([msg.x,msg.y,msg.z].join(','),msg.b);return;}
       this._netApplying = true;
       this.world.setBlock(msg.x, msg.y, msg.z, msg.b);
       this._netApplying = false;
@@ -2300,7 +2308,11 @@ export class Game {
       this.net._send({t:'mode',mode:this.combat.mode});
     }
     if (msg.self) this.combat?.receive(msg.self);
-    this.world.edits = SaveManager.arrayToEdits(msg.edits || []);
+    this._terrainRevision=Number.isSafeInteger(msg.terrainRevision)?msg.terrainRevision:0;
+    this._roomHostId=msg.hostId||null;
+    const edits=msg.editsByDimension||{overworld:msg.edits||[]};
+    for(const dim of [Dim.OVERWORLD,Dim.NETHER,Dim.END])this._dimEdits[dim]=SaveManager.arrayToEdits(edits[dim]||[]);
+    this.world.edits=this._dimEdits[this.dimension];
     for (const [, chunk] of this.world.chunks) {
       this.world.generateChunkData(chunk);
       this.world.applyEdits(chunk);
@@ -2514,7 +2526,7 @@ export class Game {
         const msg = {
           room: snap.room || this.net.room,
           title: snap.title || this._pendingJoinMsg?.title,
-          edits: snap.edits,
+          edits: snap.edits,editsByDimension:snap.editsByDimension,terrainRevision:snap.terrainRevision,hostId:snap.hostId,
           mobs: snap.mobs,
           boss: snap.boss,
           self: snap.self,

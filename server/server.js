@@ -19,6 +19,7 @@ const { URL } = require('url');
 
 async function main() {
 const { RoomBoss, CollisionWorld } = await import('./room-boss.mjs');
+const { RoomTerrain } = await import('./room-terrain.mjs');
 const { getFoodHeal } = await import('../js/items.js');
 const PORT = Number(process.env.PORT || 3040);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -113,7 +114,9 @@ class Room {
     this.seed = SEED;
     this.title = title;
     this.hostName = hostName;
-    this.edits = new Map();
+    this.terrain = new RoomTerrain(MAX_EDITS);
+    this.edits = this.terrain.getEdits();
+    this.terrainRevision = 0;
     this.peers = new Map();
     this.mobs = new Map();
     this.spells = new Spells();
@@ -164,29 +167,12 @@ class Room {
     schedulePersist();
   }
 
-  editsArray() {
-    const arr = [];
-    for (const [k, t] of this.edits) {
-      const p = k.split(',');
-      if (p.length !== 3) continue;
-      arr.push(+p[0], +p[1], +p[2], t | 0);
-    }
-    return arr;
-  }
-
-  applyEditsArray(arr) {
-    if (!Array.isArray(arr)) return;
-    for (let i = 0; i + 3 < arr.length; i += 4) {
-      if (this.edits.size >= MAX_EDITS) break;
-      this.edits.set(`${arr[i] | 0},${arr[i + 1] | 0},${arr[i + 2] | 0}`, arr[i + 3] | 0);
-    }
-  }
-
-  setBlock(x, y, z, b) {
-    if (this.edits.size >= MAX_EDITS && !this.edits.has(`${x},${y},${z}`)) return false;
-    this.edits.set(`${x | 0},${y | 0},${z | 0}`, b | 0);
-    this.touch();
-    return true;
+  editsArray(dim='overworld') { return this.terrain.editsArray(dim); }
+  applyEditsArray(arr,dim='overworld') { this.terrain.applyEditsArray(arr,dim); }
+  setBlock(x,y,z,b,dim='overworld') {
+    if(!this.terrain.setBlock(x,y,z,b,dim))return false;
+    this.terrainRevision++;
+    this.touch();return true;
   }
 
   playersList(exceptWs = null) {
@@ -217,6 +203,7 @@ class Room {
       title: this.title,
       seed: this.seed,
       edits: this.editsArray(),
+      hostId:this.hostId||null,editsByDimension:this.terrain.toJSON(),terrainRevision:this.terrainRevision,
       players: this.playersList(ws),
       playersCount: this.peers.size,
       mobs: this.mobsArray(),
@@ -244,7 +231,7 @@ class Room {
       players: this.peers.size,
       max: MAX_PLAYERS,
       names: this.playerNames(),
-      edits: this.edits.size,
+      edits: this.terrain.size,
       full: this.peers.size >= MAX_PLAYERS,
       createdAt: this.createdAt,
       ageSec: Math.floor((Date.now() - this.createdAt) / 1000),
@@ -258,7 +245,7 @@ class Room {
       hostName: this.hostName,
       boss: this.boss.snapshot(),
       seed: this.seed,
-      edits: this.editsArray(),
+      edits: this.editsArray(),editsByDimension:this.terrain.toJSON(),terrainRevision:this.terrainRevision,
       createdAt: this.createdAt,
       lastActive: this.lastActive,
     };
@@ -269,7 +256,9 @@ class Room {
     room.seed = row.seed | 0 || SEED;
     room.createdAt = row.createdAt || Date.now();
     room.lastActive = row.lastActive || Date.now();
-    room.applyEditsArray(row.edits);
+    room.terrain=RoomTerrain.fromPersist(row,MAX_EDITS);
+    room.edits=room.terrain.getEdits();
+    room.terrainRevision=Number.isSafeInteger(row.terrainRevision)?row.terrainRevision:0;
     room.collision = new CollisionWorld(room.seed, room.edits);
     room.boss = new RoomBoss(room.collision, row.boss || undefined);
     room.emptyAt = Date.now(); // 重启后无人，走宽限
@@ -393,6 +382,7 @@ function joinRoom(ws, room, name) {
     seed: room.seed,
     color,
     edits: room.editsArray(),
+    hostId:room.hostId||null,editsByDimension:room.terrain.toJSON(),terrainRevision:room.terrainRevision,
     players: room.playersList(ws),
     mobs: room.mobsArray(),
   });
@@ -806,13 +796,15 @@ wss.on('connection', (ws) => {
     }
 
     if (msg.t === 'block') {
+      if(![msg.x,msg.y,msg.z,msg.b].every(Number.isFinite))return;
       const x = msg.x | 0, y = msg.y | 0, z = msg.z | 0, b = msg.b | 0;
+      const dimension=peer.dimension;
       if (y < 0 || y >= 48) return;
-      if (!room.setBlock(x, y, z, b)) {
+      if (!room.setBlock(x, y, z, b,dimension)) {
         send(ws, { t: 'err', msg: '改动过多，无法继续同步' });
         return;
       }
-      room.broadcast({ t: 'block', x, y, z, b, by: peer.id }, ws);
+      room.broadcast({ t: 'block', x, y, z, b, dimension, revision:room.terrainRevision,by: peer.id }, ws);
       return;
     }
 
