@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { isSolid } from './voxel.js?v=mistboss5';
+import { isSolid } from './voxel.js?v=playerstats6';
 
 const BLINK_RANGE = 7.5;
 const BLINK_CD = 3200;
