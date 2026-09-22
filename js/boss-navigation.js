@@ -1,4 +1,4 @@
-import { isSolid, BlockType } from './voxel.js?v=lobby10';
+import { isSolid, BlockType } from './voxel.js?v=mistboss2';
 
 // A small grounded capsule: no teleporting through walls, ceilings, water or cliffs.
 export function findStandY(world, x, z, currentY) {

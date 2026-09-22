@@ -34,3 +34,17 @@ test('server uses real world terrain and respects newly edited walls',()=>{
  edits.set('5,19,8',3);assert.equal(w.getBlock(5,19,8),3);
  edits.set('5,19,8',0);assert.equal(w.getBlock(5,19,8),0);
 });
+test('Boss respects PvP respawn protection and marks lethal damage as manual respawn',()=>{
+ const b=new RoomBoss(flat,{x:0,y:19,z:0}),p=peer('a');p.protectedUntil=Date.now()+10000;
+ for(let i=0;i<40;i++)b.tick(.05,[p]);assert.equal(p.hp,20);
+ p.protectedUntil=0;p.hp=5;
+ for(let i=0;i<40;i++)b.tick(.05,[p]);assert.equal(p.hp,0);assert.equal(p.manualRespawn,true);
+});
+test('AK ray can hit Boss but not through world terrain or from another dimension',()=>{
+ const b=new RoomBoss(flat,{x:0,y:19,z:0}),p=peer('a',0,10),shot={direction:[0,0,-1],distance:80};
+ assert.ok(b.rayDistance,'Boss ray intersection missing');
+ assert.ok(b.rayDistance(p,shot)<10);
+ assert.equal(b.rayDistance({...p,dimension:'nether'},shot),Infinity);
+ const wall={getBlock:(x,y,z)=>y<=18||(z===5&&y<=22)?3:0};
+ assert.equal(new RoomBoss(wall,{x:0,y:19,z:0}).rayDistance(p,shot),Infinity);
+});

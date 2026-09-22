@@ -10,6 +10,7 @@
 'use strict';
 
 const http = require('http');
+const combat = require('./combat.cjs');
 const fs = require('fs');
 const path = require('path');
 const { WebSocketServer } = require('ws');
@@ -191,7 +192,7 @@ class Room {
     for (const [ws, p] of this.peers) {
       if (ws === exceptWs) continue;
       list.push({
-        id: p.id, name: p.name, color: p.color,
+        ...combat.state(p), name: p.name, color: p.color,
         x: p.x, y: p.y, z: p.z, yaw: p.yaw, pitch: p.pitch,
       });
     }
@@ -206,7 +207,7 @@ class Room {
     return {
       t: 'sync',
       boss: this.boss.snapshot(),
-      self: this.peerState(this.peers.get(ws)),
+      self: this.peers.has(ws) ? combat.state(this.peers.get(ws)) : null,
       room: this.code,
       title: this.title,
       seed: this.seed,
@@ -368,6 +369,7 @@ function joinRoom(ws, room, name) {
     hp:20, active:false, invuln:0, dimension:'overworld', lastBossHit:-Infinity,
     room, lastMove: 0,
   };
+  combat.init(peer);
   ws._peer = peer;
   room.peers.set(ws, peer);
   room.touch();
@@ -376,7 +378,7 @@ function joinRoom(ws, room, name) {
   send(ws, {
     t: 'joined',
     boss: room.boss.snapshot(),
-    self: room.peerState(peer),
+    self: combat.state(peer),
     room: room.code,
     title: room.title,
     id,
@@ -388,6 +390,7 @@ function joinRoom(ws, room, name) {
   });
   room.broadcast({
     t: 'peer',
+    ...combat.state(peer),
     id, name: peer.name, color,
     x: peer.x, y: peer.y, z: peer.z, yaw: peer.yaw, pitch: peer.pitch,
   }, ws);
@@ -488,6 +491,18 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (process.env.MC_SERVE_STATIC === '1' && req.method === 'GET') {
+    // Local development only: expose game assets, never server/data or dotfiles.
+    const asset = pathname === '/' ? '/index.html' : pathname;
+    if (/^\/(?:index\.html|(?:js|styles)\/[a-zA-Z0-9_-]+\.(?:js|css)|assets\/models\/mist-heroine\.glb|vendor\/three\/(?:three\.module\.js|addons\/(?:loaders\/GLTFLoader|utils\/BufferGeometryUtils)\.js))$/.test(asset)) {
+      const file = path.join(__dirname, '..', asset.slice(1));
+      if (fs.existsSync(file)) {
+        const mime = asset.endsWith('.js') ? 'text/javascript' : asset.endsWith('.css') ? 'text/css' : asset.endsWith('.glb') ? 'model/gltf-binary' : 'text/html';
+        res.writeHead(200, { 'Content-Type': mime + '; charset=utf-8' });
+        fs.createReadStream(file).pipe(res); return;
+      }
+    }
+  }
   res.writeHead(404, { 'Content-Type': 'text/plain' });
   res.end('mc-ws');
 });
@@ -694,8 +709,9 @@ wss.on('connection', (ws) => {
       if (peer.hp > 0) return;
       Object.assign(peer, room.collision.spawn());
       peer.hp=20; peer.invuln=3; peer.dimension='overworld'; peer.active=true;
+      peer.manualRespawn=false; peer.deadUntil=0; peer.protectedUntil=Date.now()+3000;
       send(ws,{t:'respawned',...room.peerState(peer)});
-      room.broadcast({t:'move',id:peer.id,x:peer.x,y:peer.y,z:peer.z,yaw:peer.yaw,pitch:peer.pitch},ws);
+      room.broadcast({t:'combat',...combat.state(peer),respawn:true});
       return;
     }
     if (msg.t === 'player_hurt') {
@@ -714,6 +730,30 @@ wss.on('connection', (ws) => {
       send(ws,{t:'vitals',hp:peer.hp});
       return;
     }
+    if (msg.t === 'shoot') {
+      const bossDistance = room.boss.rayDistance(peer, msg);
+      const shot = combat.shoot(peer, room.peers.values(),
+        Number.isFinite(bossDistance) ? {...msg, distance: Math.min(msg.distance,bossDistance)} : msg, Date.now());
+      if (!shot) return;
+      if (Number.isFinite(bossDistance) && !shot.target && shot.distance >= bossDistance) {
+        room.boss.combat.takeDamage(5); room.touch();
+        room.broadcast({t:'boss',boss:room.boss.snapshot()});
+      }
+      room.broadcast({ t: 'shot', by: peer.id, dimension: peer.dimension,
+        origin: shot.origin, direction: shot.direction, distance: shot.distance });
+      if (shot.target) room.broadcast({ t: 'combat', ...combat.state(shot.target), by: peer.id });
+      return;
+    }
+    // Environmental damage remains client simulated, as in the original game.
+    if (msg.t === 'vitals') {
+      const delta = Number(msg.delta);
+      if (!Number.isFinite(delta) || peer.hp <= 0) return;
+      if (delta < 0) combat.hurt(peer, Math.min(20, -delta), Date.now());
+      else peer.hp = Math.min(20, peer.hp + Math.min(20, delta));
+      room.broadcast({ t: 'combat', ...combat.state(peer) });
+      return;
+    }
+    if (peer.hp <= 0) return;
     if (msg.t === 'hit') {
       if (msg.id === 'mist-boss') {
         if (room.boss.hit(peer)) {
@@ -758,7 +798,7 @@ wss.on('connection', (ws) => {
       peer.pitch = +msg.pitch || 0;
       room.touch();
       room.broadcast({
-        t: 'move', id: peer.id,
+        t: 'move', ...combat.state(peer),
         x: peer.x, y: peer.y, z: peer.z, yaw: peer.yaw, pitch: peer.pitch,
       }, ws);
       return;
@@ -801,6 +841,9 @@ setInterval(() => {
 setInterval(() => {
   for (const room of rooms.values()) {
     if (room.peers.size === 0) continue;
+    for (const peer of room.peers.values()) {
+      if (!peer.manualRespawn && combat.respawn(peer, Date.now())) room.broadcast({ t: 'combat', ...combat.state(peer), respawn: true });
+    }
     room.tickMobs(0.2);
     room.broadcast({ t: 'mobs', list: room.mobsArray() });
   }
@@ -814,7 +857,10 @@ setInterval(() => {
     if (!room.peers.size) continue;
     const events=room.boss.tick(.05,[...room.peers.values()]);
     for (const event of events) {
-      for (const [ws,peer] of room.peers) if (peer.id===event.id) send(ws,{t:'vitals',...event});
+      for (const [ws,peer] of room.peers) if (peer.id===event.id) {
+        send(ws,{t:'vitals',...event});
+        room.broadcast({t:'combat',...combat.state(peer),cause:'mist-boss'});
+      }
     }
     if (bossTick%4===0) room.broadcast({t:'boss',boss:room.boss.snapshot()});
   }

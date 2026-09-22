@@ -5,7 +5,7 @@
 
 // Shared with the headless server collision world; same pinned build as the import map.
 import * as THREE from '../vendor/three/three.module.js';
-import { SimplexNoise } from './noise.js?v=lobby10';
+import { SimplexNoise } from './noise.js?v=mistboss2';
 
 /* ============================================
    常量与配置
@@ -715,40 +715,45 @@ export class World {
     const { cx, cz } = chunk;
     const wx0 = cx * CHUNK_SIZE;
     const wz0 = cz * CHUNK_SIZE;
+    const FLOOR = 14; // 统一地板高度，方便走门
     for (let lz = 0; lz < CHUNK_SIZE; lz++) {
       for (let lx = 0; lx < CHUNK_SIZE; lx++) {
         const wx = wx0 + lx;
         const wz = wz0 + lz;
         const hNoise = this.noise.fbm(wx * 0.03, wz * 0.03, 3, 2.0, 0.5);
-        const h = Math.floor(10 + (hNoise + 1) * 6);
+        const h = Math.floor(FLOOR + (hNoise + 1) * 3); // 14~20 缓丘
         for (let y = 0; y < CHUNK_HEIGHT; y++) {
           let b = BlockType.AIR;
           if (y === 0) b = BlockType.OBSIDIAN;
+          else if (y < FLOOR) b = BlockType.NETHERRACK;
           else if (y <= h) b = BlockType.NETHERRACK;
-          else if (y >= CHUNK_HEIGHT - 2) b = BlockType.NETHERRACK; // 基岩顶棚感
+          else if (y >= CHUNK_HEIGHT - 2) b = BlockType.NETHERRACK;
           // 偶发黑曜石柱
-          if (b === BlockType.AIR && y < 20 && hash(wx, wz + y * 3) > 0.985) b = BlockType.OBSIDIAN;
+          if (b === BlockType.AIR && y < 22 && hash(wx, wz + y * 3) > 0.988) b = BlockType.OBSIDIAN;
           chunk.setBlock(lx, y, lz, b);
         }
       }
     }
-    // 末地传送门神殿：原点附近固定结构
+    // 中央广场：末地传送台（紫色平台）— 仅 cx=cz=0
     if (cx === 0 && cz === 0) {
-      for (let x = 4; x <= 11; x++) {
-        for (let z = 4; z <= 11; z++) {
-          chunk.setBlock(x, 14, z, BlockType.OBSIDIAN);
+      for (let x = 3; x <= 12; x++) {
+        for (let z = 3; z <= 12; z++) {
+          chunk.setBlock(x, FLOOR, z, BlockType.OBSIDIAN);
+          for (let y = FLOOR + 1; y <= FLOOR + 4; y++) {
+            chunk.setBlock(x, y, z, BlockType.AIR);
+          }
         }
       }
-      // 中央末地门：一圈末地石 + 中间传送门（通往末地）
+      // 末地门：一圈末地石 + 中间传送门（站上去 → 末地）
       for (let i = 5; i <= 10; i++) {
-        chunk.setBlock(i, 15, 5, BlockType.END_STONE);
-        chunk.setBlock(i, 15, 10, BlockType.END_STONE);
-        chunk.setBlock(5, 15, i, BlockType.END_STONE);
-        chunk.setBlock(10, 15, i, BlockType.END_STONE);
+        chunk.setBlock(i, FLOOR + 1, 5, BlockType.END_STONE);
+        chunk.setBlock(i, FLOOR + 1, 10, BlockType.END_STONE);
+        chunk.setBlock(5, FLOOR + 1, i, BlockType.END_STONE);
+        chunk.setBlock(10, FLOOR + 1, i, BlockType.END_STONE);
       }
       for (let x = 6; x <= 9; x++) {
         for (let z = 6; z <= 9; z++) {
-          chunk.setBlock(x, 15, z, BlockType.PORTAL);
+          chunk.setBlock(x, FLOOR + 1, z, BlockType.PORTAL);
         }
       }
     }

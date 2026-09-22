@@ -4,22 +4,24 @@
  */
 
 import * as THREE from 'three';
+import { Combat } from './combat.js?v=mistboss2';
 import {
   World, Chunk, BlockType, BlockNames, isSolid, Dim,
   CHUNK_SIZE, CHUNK_HEIGHT, RENDER_DISTANCE, getBlockColor, getBreakDrop,
   isMobileDevice, getRenderDistance,
-} from './voxel.js?v=lobby10';
-import { AnimalManager } from './animals.js?v=lobby10';
-import { SaveManager } from './save.js?v=lobby10';
-import { NetClient, RemotePlayers } from './net.js?v=lobby10';
-import { Inventory } from './inventory.js?v=lobby10';
-import { isFood, isItem, getItemName, getItemColor, getFoodHeal } from './items.js?v=lobby10';
-import { tryLightPortal, standingInPortal, spawnReturnPortal } from './portals.js?v=lobby10';
+} from './voxel.js?v=mistboss2';
+import { AnimalManager } from './animals.js?v=mistboss2';
+import { SaveManager } from './save.js?v=mistboss2';
+import { NetClient, RemotePlayers } from './net.js?v=mistboss2';
+import { Inventory } from './inventory.js?v=mistboss2';
+import { isFood, isItem, getItemName, getItemColor, getFoodHeal } from './items.js?v=mistboss2';
+import { tryLightPortal, standingInPortal, spawnReturnPortal } from './portals.js?v=mistboss2';
+import { EnderDragon } from './dragon.js?v=mistboss2';
+import { AdminPanel } from './admin-panel.js?v=mistboss2';
+import { buildStructure } from './structures.js?v=mistboss2';
+import { apiUrl } from './config.js';
 import { MistBoss } from './mist-boss.js';
-import { findStandY } from './boss-navigation.mjs';
-import { EnderDragon } from './dragon.js?v=lobby10';
-import { AdminPanel } from './admin-panel.js?v=lobby10';
-import { buildStructure } from './structures.js?v=lobby10';
+import { findStandY } from './boss-navigation.js';
 
 /* ============================================
    玩家类 - 第一人称角色控制
@@ -39,19 +41,29 @@ class Player {
 
     // 物理参数
     this.gravity = -25;
-    this.jumpSpeed = 12;
-    this.moveSpeed = 5.5;
+    this.jumpSpeed = 9.2;       // 略低，更稳
+    this.moveSpeed = 4.8;       // 步行
+    this.sprintMul = 1.45;      // Shift 冲刺
     this.onGround = false;
 
     // 玩家碰撞体尺寸
     this.width = 0.6;
     this.height = 1.75;
-    this.eyeHeight = 1.6;
+    this.eyeHeight = 1.62;
 
     // 输入状态
     this.keys = {};
     this.mouseDX = 0;
     this.mouseDY = 0;
+
+    // 视角手感
+    this.lookSens = 0.00215;
+    this.viewKickP = 0;
+    this.viewKickY = 0;
+    this.shakeAmp = 0;
+    this._bob = 0;
+    this._landPunch = 0;
+    this._sprinting = false;
 
     // 交互参数
     this.reachDistance = 7;
@@ -72,12 +84,17 @@ class Player {
     this.adminFly = false;
   }
 
+  addShake(amp) {
+    this.shakeAmp = Math.min(0.08, (this.shakeAmp || 0) + amp);
+  }
+
   /** 处理鼠标移动（视角旋转） */
   onMouseMove(dx, dy) {
-    const sensitivity = 0.002;
-    this.yaw -= dx * sensitivity;
-    this.pitch -= dy * sensitivity;
-    // 限制俯仰角范围
+    let sens = this.lookSens;
+    // 开镜/持枪略降灵敏度
+    if (this._armedLook) sens *= 0.72;
+    this.yaw -= dx * sens;
+    this.pitch -= dy * sens;
     this.pitch = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, this.pitch));
   }
 
@@ -112,9 +129,15 @@ class Player {
       moveDir.normalize();
     }
 
+    const wantSprint = !!(this.keys['ShiftLeft'] || this.keys['ShiftRight'])
+      && !this.adminFly
+      && (this.keys['KeyW'] || this.keys['ArrowUp']);
+    this._sprinting = wantSprint && this.onGround && moveDir.lengthSq() > 0;
+    const speed = this.moveSpeed * (this._sprinting ? this.sprintMul : 1) * (this.adminFly ? 1.8 : 1);
+
     // 水平移动
-    this.velocity.x = moveDir.x * this.moveSpeed * (this.adminFly ? 1.8 : 1);
-    this.velocity.z = moveDir.z * this.moveSpeed * (this.adminFly ? 1.8 : 1);
+    this.velocity.x = moveDir.x * speed;
+    this.velocity.z = moveDir.z * speed;
 
     // 管理飞行：空格上升，Shift 下降，无重力
     if (this.adminFly) {
@@ -125,21 +148,7 @@ class Player {
       this.position.y += this.velocity.y * dt;
       this.position.z += this.velocity.z * dt;
       this.onGround = false;
-      this.camera.position.set(
-        this.position.x,
-        this.position.y + this.eyeHeight,
-        this.position.z
-      );
-      const lookDir = new THREE.Vector3(
-        -Math.sin(this.yaw) * Math.cos(this.pitch),
-        Math.sin(this.pitch),
-        -Math.cos(this.yaw) * Math.cos(this.pitch)
-      );
-      this.camera.lookAt(
-        this.camera.position.x + lookDir.x,
-        this.camera.position.y + lookDir.y,
-        this.camera.position.z + lookDir.z
-      );
+      this._applyCamera(0);
       this._raycast();
       return;
     }
@@ -202,6 +211,7 @@ class Player {
 
     // 摔落伤害（落地瞬间）
     if (!this._wasOnGround && this.onGround && !inWater) {
+      this._landPunch = Math.min(0.22, 0.04 + Math.max(0, -this._fallVy) * 0.012);
       const dmg = Math.floor((-this._fallVy - 12) / 2);
       if (dmg > 0 && this.invuln <= 0) {
         this.hp = Math.max(0, this.hp - dmg);
@@ -212,27 +222,54 @@ class Player {
     if (!this.onGround) this._fallVy = this.velocity.y;
     else this._fallVy = 0;
 
-    // 更新相机
+    // 走路晃动
+    const moving = Math.hypot(this.velocity.x, this.velocity.z) > 0.4 && this.onGround;
+    if (moving) this._bob += dt * (this._sprinting ? 14 : 10);
+    else this._bob *= 0.9;
+    this._landPunch *= Math.exp(-dt * 14);
+
+    this._applyCamera(dt);
+
+    // 射线检测（目标方块）
+    this._raycast();
+  }
+
+  /** 第一人称相机：眼睛高度 + 走路晃动 + 后坐力/震动 */
+  _applyCamera(dt) {
+    const bobY = Math.sin(this._bob) * (this._sprinting ? 0.055 : 0.035);
+    const bobX = Math.cos(this._bob * 0.5) * (this._sprinting ? 0.03 : 0.018);
+    const land = this._landPunch;
+
+    // 后坐力衰减
+    this.viewKickP *= Math.exp(-(dt || 0.016) * 9);
+    this.viewKickY *= Math.exp(-(dt || 0.016) * 9);
+    this.shakeAmp *= Math.exp(-(dt || 0.016) * 10);
+    const sh = this.shakeAmp;
+    const sx = (Math.random() - 0.5) * sh;
+    const sy = (Math.random() - 0.5) * sh;
+
+    const yaw = this.yaw + this.viewKickY + sx;
+    const pitch = Math.max(
+      -Math.PI / 2 + 0.01,
+      Math.min(Math.PI / 2 - 0.01, this.pitch + this.viewKickP + sy)
+    );
+
     this.camera.position.set(
-      this.position.x,
-      this.position.y + this.eyeHeight,
+      this.position.x + bobX,
+      this.position.y + this.eyeHeight + bobY - land,
       this.position.z
     );
 
-    // 更新相机朝向
     const lookDir = new THREE.Vector3(
-      -Math.sin(this.yaw) * Math.cos(this.pitch),
-      Math.sin(this.pitch),
-      -Math.cos(this.yaw) * Math.cos(this.pitch)
+      -Math.sin(yaw) * Math.cos(pitch),
+      Math.sin(pitch),
+      -Math.cos(yaw) * Math.cos(pitch)
     );
     this.camera.lookAt(
       this.camera.position.x + lookDir.x,
       this.camera.position.y + lookDir.y,
       this.camera.position.z + lookDir.z
     );
-
-    // 射线检测（目标方块）
-    this._raycast();
   }
 
   /**
@@ -849,12 +886,13 @@ export class Game {
       this.player.yaw = p.yaw || 0;
       this.player.pitch = typeof p.pitch === 'number' ? p.pitch : -0.3;
     } else {
-      this._spawnX = 5.4;
-      this._spawnZ = 22.6;
-      this._spawnY = -27.0;
+      // 出生在平坦文字区地面上，正对地狱门（门在 z≈4，朝 -Z 看）
+      this._spawnX = 7.5;
+      this._spawnZ = 8.5;
+      this._spawnY = World.TEXT_GROUND_Y + 1; // 19
       this.player.position.set(this._spawnX, this._spawnY, this._spawnZ);
-      this.player.yaw = 0;
-      this.player.pitch = -0.3;
+      this.player.yaw = 0; // 看向 -Z，正对门
+      this.player.pitch = -0.15;
     }
 
     // 相机保持立墙预览视角，等用户点击开始后再切到玩家视角
@@ -871,21 +909,38 @@ export class Game {
     this._updateHotbar();
   }
 
-  /** 主世界出生点旁生成已点燃地狱门 */
+  /** 主世界出生点旁：沙地上已点燃地狱门（可走进） */
   _ensureStarterPortal() {
     if (this.dimension !== Dim.OVERWORLD) return;
-    for (const t of this.world.edits.values()) {
-      if (t === BlockType.PORTAL) return; // 已有门
+    // 正确位置：文字平地 z≈4 的门芯；旧档若门在远处悬空则重建
+    let good = 0;
+    for (const [key, t] of this.world.edits) {
+      if (t !== BlockType.PORTAL) continue;
+      const parts = key.split(',');
+      const wy = +parts[1];
+      const wz = +parts[2];
+      if (wz >= 3 && wz <= 5 && wy >= World.TEXT_GROUND_Y && wy <= World.TEXT_GROUND_Y + 4) good++;
     }
-    // 门框底边贴在沙地 y=18，面向玩家出生点附近
-    const portal = spawnReturnPortal(this.world, 12, World.TEXT_GROUND_Y || 18, 18, 'x');
-    // 重筑受影响区块
-    for (let cx = 0; cx <= 1; cx++) {
-      for (let cz = 1; cz <= 2; cz++) {
-        this._rebuildChunkAt(cx, cz);
+    if (good >= 6) {
+      this._starterPortalPos = { x: 7.5, y: World.TEXT_GROUND_Y + 1, z: 4.5, axis: 'x' };
+      return;
+    }
+
+    const gy = World.TEXT_GROUND_Y;
+    const portal = spawnReturnPortal(this.world, 7.5, gy, 4, 'x');
+    this._rebuildPortalChunks(portal);
+    this._starterPortalPos = portal;
+  }
+
+  /** 重建传送门附近区块 mesh */
+  _rebuildPortalChunks(portal) {
+    const cx0 = Math.floor((portal?.x ?? 8) / CHUNK_SIZE);
+    const cz0 = Math.floor((portal?.z ?? 4) / CHUNK_SIZE);
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        this._rebuildChunkAt(cx0 + dx, cz0 + dz);
       }
     }
-    this._starterPortalPos = portal;
   }
 
   _rebuildChunkAt(cx, cz) {
@@ -969,13 +1024,15 @@ export class Game {
     // 初始化机器人生成管理器
     this.animalManager = new AnimalManager(this.scene, this.world, this.isMobile);
 
-    // 相机：移动端更广视角（90°），桌面端默认（75°）
-    this.defaultFov = this.isMobile ? 90 : 75;
+    // 相机：更接近真人视野；持枪/冲刺会动态微调
+    this.defaultFov = this.isMobile ? 80 : 70;
     this.fov = this.defaultFov;
-    this.fovMin = 15;
-    this.fovMax = 130;
+    this.fovMin = 40;
+    this.fovMax = 110;
+    this._fovPunch = 0;
+    this._fovTargetBoost = 0;
     this.camera = new THREE.PerspectiveCamera(
-      this.fov, window.innerWidth / window.innerHeight, 0.1, 1000
+      this.fov, window.innerWidth / window.innerHeight, 0.08, 1000
     );
   }
 
@@ -1091,11 +1148,29 @@ export class Game {
     });
   }
 
+  _controlsActive() {
+    return !this._dead && this.isRunning && (this.isPointerLocked || this._fallbackActive || this.isMobile);
+  }
+
+  _pauseFallback() {
+    this._fallbackActive = false;
+    this._lockPending = false;
+    this._lookDrag = null;
+    this.player.keys = {};
+    if (this.combat) this.combat.held = false;
+    this.ui.pauseScreen.style.display = 'flex';
+    this._showGameUI(false);
+    this._persist('auto');
+  }
+
   /** 绑定事件监听 */
   _initEvents() {
     // 键盘事件（桌面端 + 移动端外接键盘通用）
     document.addEventListener('keydown', (e) => {
       if (this._dead) return;
+      if (/INPUT|TEXTAREA|SELECT/.test(e.target.tagName) || e.target.isContentEditable) return;
+      if (e.code === 'Escape' && this._fallbackActive) { this._pauseFallback(); return; }
+      if (!this._controlsActive()) return;
       this.player.keys[e.code] = true;
 
       // 数字键选择热栏 1-9
@@ -1148,15 +1223,36 @@ export class Game {
 
     // 鼠标移动（仅桌面端指针锁定后）
     document.addEventListener('mousemove', (e) => {
-      if (!this.isPointerLocked || this._dead) return;
-      this.player.onMouseMove(e.movementX, e.movementY);
+      if (this._dead) return;
+      if (this.isPointerLocked) this.player.onMouseMove(e.movementX, e.movementY);
+      else if (this._fallbackActive && this._lookDrag) {
+        const dx = e.clientX - this._lookDrag.x, dy = e.clientY - this._lookDrag.y;
+        this._lookDrag.distance += Math.abs(dx) + Math.abs(dy);
+        this._lookDrag.x = e.clientX; this._lookDrag.y = e.clientY;
+        this.player.onMouseMove(dx, dy);
+      }
     });
 
     // 鼠标：左键攻击/破坏，右键放置（对标我的世界）
     document.addEventListener('mousedown', (e) => {
-      if (!this.isPointerLocked || this._dead) return;
+      if (this._dead) return;
+      if (!this._controlsActive() || (!this.isPointerLocked && e.target !== this.canvas)) return;
+      if (this._fallbackActive && e.button === 2) {
+        this._lookDrag = { x: e.clientX, y: e.clientY, distance: 0 }; return;
+      }
       if (e.button === 0) this._primaryAction();
       else if (e.button === 2) this._secondaryAction();
+    });
+
+    document.addEventListener('mouseup', (e) => {
+      if (e.button !== 2 || !this._lookDrag) return;
+      const click = this._lookDrag.distance < 4;
+      this._lookDrag = null;
+      if (click && this._fallbackActive && e.target === this.canvas) this._secondaryAction();
+    });
+    window.addEventListener('blur', () => {
+      this.player.keys = {};
+      if (this._fallbackActive) this._pauseFallback();
     });
 
     // 禁用右键菜单
@@ -1164,7 +1260,8 @@ export class Game {
 
     // 滚轮切换方块（仅桌面端指针锁定后）
     document.addEventListener('wheel', (e) => {
-      if (!this.isPointerLocked || this._dead) return;
+      if (this._dead) return;
+      if (!this._controlsActive() || (!this.isPointerLocked && e.target !== this.canvas)) return;
 
       // Ctrl + 滚轮 / 触控板双指缩放 → 调整视野
       // 捏合(deltaY>0) = 缩小画面 = 视野变广(FOV变大)；推开(deltaY<0) = 放大画面 = 视野变窄(FOV变小)
@@ -1191,26 +1288,37 @@ export class Game {
           return;
         }
         if (this.isPointerLocked) {
+          this._lockPending = false;
+          this._fallbackActive = false;
           this.ui.pauseScreen.style.display = 'none';
           this._showGameUI(true);
         } else if (this.isRunning) {
+          this.player.keys = {};
           this.ui.pauseScreen.style.display = 'flex';
           this._persist('auto'); // 暂停时自动存
         }
       });
 
-      const requestLock = () => {
-        if (!this.isPointerLocked && this.isRunning && !this._dead) {
-          const retry = () => {
-            if (!this._dead && this.isRunning) this.ui.pauseScreen.style.display = 'flex';
-          };
-          try {
-            // Joining a room awaits a socket reply; some browsers no longer
-            // consider it a user gesture. Offer an explicit resume click.
-            this.canvas.requestPointerLock()?.catch(retry);
-          } catch { retry(); }
-        }
+      const fallback = () => {
+        if (this._dead || !this._lockPending || !this.isRunning || this.isPointerLocked) return;
+        this._lockPending = false;
+        this._pointerFallback = true;
+        this._fallbackActive = true;
+        this.ui.pauseScreen.style.display = 'none';
+        this._showGameUI(true);
       };
+      document.addEventListener('pointerlockerror', fallback);
+      const requestLock = () => {
+        if (this._dead || this.isPointerLocked || !this.isRunning || this._lockPending) return;
+        this._lockPending = true;
+        if (this._pointerFallback || !this.canvas.requestPointerLock) { fallback(); return; }
+        try {
+          const pending = this.canvas.requestPointerLock();
+          pending?.catch(fallback);
+          setTimeout(fallback, 1200);
+        } catch { fallback(); }
+      };
+
 
       // 开始/继续由按钮触发，见 _initSaveUI
       this._requestLock = requestLock;
@@ -1272,6 +1380,8 @@ export class Game {
 
   /** 左键：优先打怪，否则破坏方块 */
   _primaryAction() {
+    if (this.player.hp <= 0) return;
+    if (this.combat?.armed) { this.combat.shoot(); return; }
     if (!this.isRunning) return;
     this._refreshEntityTarget();
     if (this.player.targetMob && this.player.attackCooldown <= 0) {
@@ -1292,6 +1402,7 @@ export class Game {
 
   /** 右键：食物则吃；否则放置 */
   _secondaryAction() {
+    if (this.player.hp <= 0 || this.combat?.armed) return;
     if (!this.isRunning) return;
     const type = this.inventory.selectedType(this.selectedSlot);
     if (!type) {
@@ -1314,6 +1425,7 @@ export class Game {
   }
 
   _eatSelected() {
+    if (this.player.hp <= 0) return;
     const type = this.inventory.selectedType(this.selectedSlot);
     if (!isFood(type)) return;
     if (this.player.hp >= this.player.maxHp) {
@@ -1356,8 +1468,9 @@ export class Game {
       this._showSaveToast('门框不对：内空宽2高3，外圈黑曜石');
       return;
     }
+    this._rebuildPortalChunks({ x: lit.x + 1.5, y: lit.y + 1, z: lit.z });
     this._dirtySinceSave = true;
-    this._showSaveToast('地狱门已点燃！走进紫色门');
+    this._showSaveToast('地狱门已点燃！走进紫色方块，站约1秒');
   }
 
   _attackMob(robot) {
@@ -1515,27 +1628,21 @@ export class Game {
 
     // 回程门 / 末影龙
     if (dim === Dim.NETHER) {
-      const hasPortal = [...this.world.edits.values()].includes(BlockType.PORTAL);
-      if (!hasPortal) {
-        // 回程门放在 x=20，避开中央末地神殿
-        spawnReturnPortal(this.world, 20, 14, 8, 'x');
-        const key = this.world.chunkKey(1, 0);
-        let ch = this.world.chunks.get(key);
-        if (!ch) {
-          ch = this._createChunk(1, 0);
-          if (ch.mesh) this.scene.add(ch.mesh);
-          if (ch.waterMesh) this.scene.add(ch.waterMesh);
-        } else {
-          if (ch.mesh) this.scene.remove(ch.mesh);
-          if (ch.waterMesh) this.scene.remove(ch.waterMesh);
-          this.world.generateChunkData(ch);
-          this.world.applyEdits(ch);
-          ch.buildMesh((wx, wy, wz) => this.world.getBlock(wx, wy, wz), this.world.material, this.world.waterMaterial);
-          if (ch.mesh) this.scene.add(ch.mesh);
-          if (ch.waterMesh) this.scene.add(ch.waterMesh);
-        }
+      const FLOOR = 14;
+      let hasReturn = false;
+      for (const [key, t] of this.world.edits) {
+        if (t !== BlockType.PORTAL) continue;
+        const wx = +key.split(',')[0];
+        if (wx >= 18) { hasReturn = true; break; }
       }
-      this.player.position.set(21, 16, 8);
+      if (!hasReturn) {
+        const portal = spawnReturnPortal(this.world, 21, FLOOR, 8, 'x');
+        this._rebuildPortalChunks(portal);
+      }
+      // 回程门内侧，面朝中央末地台（-X）
+      this.player.position.set(21.5, FLOOR + 1, 9.5);
+      this.player.yaw = Math.PI / 2;
+      this.player.pitch = -0.1;
     }
     if (dim === Dim.END && !this._dragonKilled) {
       this._dragon = new EnderDragon(this.scene, 0, 28, 0);
@@ -1546,9 +1653,15 @@ export class Game {
     if (!this._online) this.animalManager.spawnAnimals(dim);
 
     this._ensureMistBoss();
-    this._portalTimer = -2; // 防立刻回传
+    this._portalTimer = -2.5; // 防立刻回传
     this._updateDimHud();
-    this._showSaveToast(dim === Dim.NETHER ? '已进入地狱 · 中央紫色台通往末地' : dim === Dim.END ? '末地 · 击败末影龙！' : '回到主世界');
+    this._showSaveToast(
+      dim === Dim.NETHER
+        ? '已进入地狱 · 回程门在身后 · 中央紫色台→末地'
+        : dim === Dim.END
+          ? '末地 · 击败末影龙！'
+          : '回到主世界'
+    );
   }
 
   /** Solo only: keep the new Boss out of the server's unsynchronized mob list. */
@@ -1639,6 +1752,9 @@ export class Game {
   _showDeathScreen() {
     if (this._dead) return;
     this._dead = true;
+    this._fallbackActive = false;
+    this._lockPending = false;
+    if (this.combat) { this.combat.held=false; this.combat.lastHp=0; }
     this.isRunning = false;
     this.player.hp = 0;
     this.player.keys = {};
@@ -1674,6 +1790,7 @@ export class Game {
     this.player.velocity.set(0,0,0);
     this.player.keys = {};
     this.player.hp = this.player.maxHp;
+    if (this.combat) { this.combat.lastHp=this.player.hp; this.combat.deadUntil=0; }
     this.player.invuln = 3;
     this.player._fallVy = 0;
     this.player._wasOnGround = true;
@@ -1711,38 +1828,65 @@ export class Game {
     if (!this.isRunning) return;
     if (this._portalTimer < 0) {
       this._portalTimer += dt;
+      this._setPortalCharge(0);
       return;
     }
     if (!standingInPortal(this.world, this.player.position.x, this.player.position.y, this.player.position.z)) {
       this._portalTimer = 0;
+      this._setPortalCharge(0);
       return;
     }
     this._portalTimer += dt;
-    if (this._portalTimer < 1.2) return;
+    const need = 1.0;
+    this._setPortalCharge(Math.min(1, this._portalTimer / need));
+    if (this._portalTimer < need) return;
     this._portalTimer = -3;
+    this._setPortalCharge(0);
 
-    // 路由：主世界↔地狱；地狱中央神殿门→末地；末地门→主世界
+    // 路由：主世界↔地狱；地狱中央台→末地；末地门→主世界
     if (this.dimension === Dim.OVERWORLD) {
       this._switchDimension(Dim.NETHER);
     } else if (this.dimension === Dim.NETHER) {
-      // 在神殿平台上（y>=15 且靠近原点）→ 末地，否则回主世界
       const p = this.player.position;
-      if (Math.hypot(p.x - 8, p.z - 8) < 6 && p.y >= 14) {
+      // 中央末地台（约 6~9,15,6~9）→ 末地；回程门（x≥18）→ 主世界
+      if (p.x >= 5 && p.x <= 11 && p.z >= 5 && p.z <= 11 && p.y >= 14) {
         this._switchDimension(Dim.END);
       } else {
-        this._switchDimension(Dim.OVERWORLD);
+        this._switchDimension(Dim.OVERWORLD, this._starterPortalPos
+          ? { x: this._starterPortalPos.x, y: this._starterPortalPos.y, z: (this._starterPortalPos.z || 4) + 3 }
+          : null);
       }
     } else {
-      this._switchDimension(Dim.OVERWORLD);
+      this._switchDimension(Dim.OVERWORLD, this._starterPortalPos
+        ? { x: this._starterPortalPos.x, y: this._starterPortalPos.y, z: (this._starterPortalPos.z || 4) + 3 }
+        : null);
     }
   }
 
+  _setPortalCharge(t) {
+    let el = document.getElementById('portalCharge');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'portalCharge';
+      el.innerHTML = '<div class="portal-charge-bar"><i></i></div><span>穿越中…</span>';
+      document.body.appendChild(el);
+    }
+    if (t <= 0) {
+      el.style.display = 'none';
+      return;
+    }
+    el.style.display = 'flex';
+    const bar = el.querySelector('i');
+    if (bar) bar.style.width = `${(t * 100) | 0}%`;
+  }
+
   _ensureHud() {
+    if (!this.combat) this.combat = new Combat(this);
     if (document.getElementById('hpHud')) return;
     const el = document.createElement('div');
     el.id = 'hpHud';
     el.style.display = 'none';
-    el.innerHTML = '<span class="hp-label">❤</span><span id="hpHearts"></span>';
+    el.innerHTML = '<span class="hp-label">❤</span><progress id="hpBar" max="20" value="20"></progress><span id="hpHearts"></span>';
     document.body.appendChild(el);
     this._updateHpHud();
   }
@@ -1751,6 +1895,8 @@ export class Game {
     const hearts = document.getElementById('hpHearts');
     if (!hearts || !this.player) return;
     const hp = Math.max(0, Math.ceil(this.player.hp));
+    const bar = document.getElementById('hpBar');
+    if (bar) bar.value = hp;
     hearts.textContent = `${hp} / ${this.player.maxHp}`;
     hearts.style.color = hp <= 4 ? '#ff5252' : '#fff';
   }
@@ -1769,15 +1915,12 @@ export class Game {
       this._stopRoomPoll();
       this.isRunning = true;
       this.ui.startScreen.style.display = 'none';
-      // 出生在地狱门前，方便直接去打龙
-      if (this._starterPortalPos && this.dimension === Dim.OVERWORLD) {
-        this.player.position.set(
-          this._starterPortalPos.x - 2.5,
-          (World.TEXT_GROUND_Y || 18) + 1.1,
-          this._starterPortalPos.z
-        );
-        this.player.position.y = this.world.getSurfaceHeight(Math.floor(this.player.position.x), Math.floor(this.player.position.z)) + .05;
-        this.player.yaw = -Math.PI / 2; // 面朝门
+      // 新开局：站在地狱门正前方（门面朝 ±Z）；读档保持存档坐标
+      if (this._starterPortalPos && this.dimension === Dim.OVERWORLD && !this._saveData) {
+        const p = this._starterPortalPos;
+        this.player.position.set(p.x, World.TEXT_GROUND_Y + 1.1, (p.z || 4) + 3.5);
+        this.player.yaw = 0;
+        this.player.pitch = -0.1;
       }
       this.camera.position.set(
         this.player.position.x,
@@ -1930,10 +2073,13 @@ export class Game {
 
   /** 联机事件绑定 */
   _bindNet() {
+    this.net.on('combat', msg => this.combat?.receive(msg));
+    this.net.on('shot', msg => this.combat?.trace(msg));
     this.net.on('boss', msg => this._syncOnlineBoss(msg.boss));
     this.net.on('vitals', msg => {
       if (!this._online || this._hostWaiting || !Number.isFinite(msg.hp)) return;
       this.player.hp = Math.max(0,Math.min(20,msg.hp));
+      if (this.combat) this.combat.lastHp = this.player.hp;
       if (msg.cause) this._lastDamageBy = msg.cause;
       this._updateHpHud();
       if (this.player.hp <= 0) this._showDeathScreen();
@@ -2113,6 +2259,7 @@ export class Game {
 
   /** 用房间差分覆盖本地世界 */
   _applyRoomState(msg) {
+    if (msg.self) this.combat?.receive(msg.self);
     this.world.edits = SaveManager.arrayToEdits(msg.edits || []);
     for (const [, chunk] of this.world.chunks) {
       this.world.generateChunkData(chunk);
@@ -2448,7 +2595,7 @@ export class Game {
 
   async _probeService() {
     try {
-      const r = await fetch(`/api/health?t=${Date.now()}`, { cache: 'no-store' });
+      const r = await fetch(apiUrl(`/api/health?t=${Date.now()}`), { cache: 'no-store' });
       this._setServiceStatus(r.ok);
       if (!r.ok) this._setOnlineStatus('联机服务异常', true);
     } catch {
@@ -2591,15 +2738,38 @@ export class Game {
 
   /** 调整视野角度（FOV） */
   _adjustFOV(delta) {
-    this.fov = Math.max(this.fovMin, Math.min(this.fovMax, this.fov + delta));
-    this.camera.fov = this.fov;
-    this.camera.updateProjectionMatrix();
+    this.defaultFov = Math.max(this.fovMin, Math.min(this.fovMax, this.defaultFov + delta));
+    this._applyFovNow();
     this._showFOVHint();
   }
 
   /** 重置视野到默认值 */
   _resetFOV() {
-    this._adjustFOV(this.defaultFov - this.fov);
+    this.defaultFov = this.isMobile ? 80 : 70;
+    this._fovPunch = 0;
+    this._fovTargetBoost = 0;
+    this._applyFovNow();
+    this._showFOVHint();
+  }
+
+  /** 持枪等瞬时 FOV 目标偏移 */
+  _punchFov(boost) {
+    this._fovTargetBoost = boost || 0;
+  }
+
+  _applyFovNow() {
+    if (!this.camera) return;
+    const sprint = this.player?._sprinting ? 5 : 0;
+    const next = this.defaultFov + (this._fovPunch || 0) + sprint;
+    this.fov = next;
+    this.camera.fov = next;
+    this.camera.updateProjectionMatrix();
+  }
+
+  _tickFov(dt) {
+    const want = (this._fovTargetBoost || 0);
+    this._fovPunch = (this._fovPunch || 0) + (want - (this._fovPunch || 0)) * Math.min(1, dt * 8);
+    this._applyFovNow();
   }
 
   /** 短暂显示 FOV 提示 */
@@ -2673,19 +2843,16 @@ export class Game {
     }
 
     // 桌面端指针锁定 或 移动端运行时更新游戏逻辑
-    if (!this._dead && this.isRunning && (this.isPointerLocked || this.isMobile)) {
-      const hpBefore = this.player.hp;
-      this.player.update(dt);
-      if (this.player.hp < hpBefore) {
-        this._lastDamageBy = '';
-        if (this._online) this.net._send({t:'player_hurt',hp:this.player.hp});
-      }
+    if (!this._dead && this._controlsActive()) {
+      if (this.player.hp > 0) this.player.update(dt);
+      this.player.dimension = this.dimension;
       this.world.update(this.player.position.x, this.player.position.z);
       this.highlight.update(this.player.targetBlock);
       this._refreshEntityTarget();
       this._updateHpHud();
-      this._tickPortal(dt);
-      if (this._online && this.net) this.net.tickMove(dt, this.player, this.dimension);
+      if (this.player.hp > 0) this._tickPortal(dt);
+      if (this._online && this.net && this.player.hp > 0) this.net.tickMove(dt, this.player);
+
       const damage = !this._online ? (this._mistBoss?.update(dt, this.player) || 0) : 0;
       if (damage > 0 && this.player.hp > 0) {
         this.player.hp = Math.max(0, this.player.hp - damage);
@@ -2695,11 +2862,14 @@ export class Game {
         this._updateHpHud();
       }
       this._updateBossHud();
-      if (this.player.hp <= 0) this._showDeathScreen();
+      if (!this._online && this.player.hp <= 0) this._showDeathScreen();
     }
 
     if (this._online && this._mistBoss) this._mistBoss.update(dt,this.player);
-    if (this.remotes) this.remotes.update(dt, this.camera);
+    this.combat?.tick();
+    if (this.player) this.player._armedLook = !!this.combat?.armed;
+    this._tickFov(dt);
+    if (this.remotes) this.remotes.update(dt, this.camera, this.dimension);
 
     if (this.animalManager) this.animalManager.update(dt);
     if (this._dragon) this._dragon.update(dt);

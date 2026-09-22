@@ -35,9 +35,12 @@ test('two real sockets see one Boss, shared damage, authoritative death and prot
  assert.equal(wounded.boss.hp,1495);
  for(let i=0;i<20;i++)a.send({t:'hit',id:'mist-boss',dmg:9999});
  a.send({t:'sync'});const snap=await a.wait(m=>m.t==='sync');assert.equal(snap.boss.hp,1495);
+ a.send({t:'shoot',direction:[0,0,-1],distance:80});
+ assert.equal((await b.wait(m=>m.t==='boss'&&m.boss.hp===1490)).boss.hp,1490);
  const hits=[];for(let i=0;i<4;i++)hits.push(await a.wait(m=>m.t==='vitals'&&m.cause==='mist-boss',6000));
  assert.deepEqual(hits.map(m=>m.hp),[15,10,5,0]);
- b.send({t:'sync'});assert.equal((await b.wait(m=>m.t==='sync')).boss.hp,1495);
+ b.send({t:'sync'});assert.equal((await b.wait(m=>m.t==='sync')).boss.hp,1490);
+ await delay(3300);a.send({t:'sync'});assert.equal((await a.wait(m=>m.t==='sync')).self.hp,0);
  a.send({t:'respawn'});const revived=await a.wait(m=>m.t==='respawned');assert.equal(revived.hp,20);
  a.send({t:'move',x:pos.x,y:pos.y,z:pos.z+1,dimension:'overworld',hp:20,yaw:0,pitch:0});
  await delay(1500);assert.equal(a.messages.filter(m=>m.t==='vitals'&&m.cause==='mist-boss').length,0);

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 let findStandY, hasLineOfSight;
-try { ({findStandY,hasLineOfSight}=await import('../js/boss-navigation.mjs')); } catch(e){if(e.code!=='ERR_MODULE_NOT_FOUND')throw e;}
+try { ({findStandY,hasLineOfSight}=await import('../js/boss-navigation.js')); } catch(e){if(e.code!=='ERR_MODULE_NOT_FOUND')throw e;}
 const flat={getBlock:(x,y,z)=>y<=0?3:0};
 test('Boss stands on ground and steps up one block, never a tall wall or cliff',()=>{
   assert.ok(findStandY,'navigation implementation missing');

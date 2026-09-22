@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 let BossCombat;
-try { ({ BossCombat } = await import('../js/boss-combat.mjs')); } catch (e) { if (e.code !== 'ERR_MODULE_NOT_FOUND') throw e; }
+try { ({ BossCombat } = await import('../js/boss-combat.js')); } catch (e) { if (e.code !== 'ERR_MODULE_NOT_FOUND') throw e; }
 const target = (distance = 1) => ({ distance, height: 0, visible: true, playerAlive: true, invulnerable: false });
 test('Boss survives 1499 damage and dies at 1500; cannot attack after death', () => {
   assert.ok(BossCombat, 'Boss combat implementation is missing');

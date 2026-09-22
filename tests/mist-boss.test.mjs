@@ -48,7 +48,10 @@ test('loaded rig is grounded even if no renderer updated its parent transform ye
  b.group.updateMatrixWorld(true);
  // Exclude the held sword, which can extend below the hand.
  const sword=b.sword;b.sword.removeFromParent();
+ b.model.traverse(o=>{if(o.isSkinnedMesh)o.computeBoundingBox();});
  const bounds=new THREE.Box3().setFromObject(b.model);
  assert.ok(Math.abs(bounds.min.y-19)<.1,`feet at ${bounds.min.y}, expected ground 19`);
+ const center=bounds.getCenter(new THREE.Vector3());
+ assert.ok(Math.abs(center.x-5)<.1&&Math.abs(center.z-8)<.1,'visual body must align with collision position');
  b.dispose();sword.traverse(o=>{o.geometry?.dispose();if(o.material)o.material.dispose();});
 });

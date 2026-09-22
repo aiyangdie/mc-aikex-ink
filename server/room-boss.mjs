@@ -1,6 +1,6 @@
-import {World,Chunk,CHUNK_SIZE,CHUNK_HEIGHT} from '../js/voxel.js';
-import {BossCombat} from '../js/boss-combat.mjs';
-import {findStandY,hasLineOfSight} from '../js/boss-navigation.mjs';
+import {World,Chunk,CHUNK_SIZE,CHUNK_HEIGHT,isSolid} from '../js/voxel.js';
+import {BossCombat} from '../js/boss-combat.js';
+import {findStandY,hasLineOfSight} from '../js/boss-navigation.js';
 
 // Reuse the actual generator, without WebGL/DOM. Cache only nearby base chunks;
 // edits are read on every query so placed walls immediately affect pursuit/hits.
@@ -46,6 +46,21 @@ export class RoomBoss {
     if(!hasLineOfSight(this.world,peer,this.position))return false;
     peer.lastBossHit=now;this.combat.takeDamage(5);return true;
   }
+  rayDistance(peer,msg) {
+    const d=msg.direction;
+    if(this.combat.dead||!this.eligible(peer)||!Array.isArray(d)||d.length!==3||!d.every(Number.isFinite)||!Number.isFinite(msg.distance))return Infinity;
+    if(Math.abs(Math.hypot(...d)-1)>.01)return Infinity;
+    const o=[peer.x,peer.y+1.62,peer.z],b=this.position;
+    const lo=[b.x-.5,b.y,b.z-.5],hi=[b.x+.5,b.y+2.1,b.z+.5];
+    let near=0,far=Math.min(80,Math.max(0,msg.distance));
+    for(let i=0;i<3;i++) {
+      if(Math.abs(d[i])<1e-8){if(o[i]<lo[i]||o[i]>hi[i])return Infinity;}
+      else {const a=(lo[i]-o[i])/d[i],z=(hi[i]-o[i])/d[i];near=Math.max(near,Math.min(a,z));far=Math.min(far,Math.max(a,z));}
+    }
+    if(near>far)return Infinity;
+    for(let t=0;t<near;t+=.1)if(isSolid(this.world.getBlock(Math.floor(o[0]+d[0]*t),Math.floor(o[1]+d[1]*t),Math.floor(o[2]+d[2]*t))))return Infinity;
+    return near;
+  }
   tick(dt,peers) {
     const events=[];
     for(const p of peers)p.invuln=Math.max(0,(p.invuln||0)-dt);
@@ -63,7 +78,7 @@ export class RoomBoss {
     if(!target){this.combat.step(dt,{playerAlive:false});return events;}
     const dx=target.x-this.position.x,dz=target.z-this.position.z;
     const result=this.combat.step(dt,{distance:Math.hypot(dx,dz),height:target.y-this.position.y,
-      visible:hasLineOfSight(this.world,this.position,target),playerAlive:true,invulnerable:target.invuln>0});
+      visible:hasLineOfSight(this.world,this.position,target),playerAlive:true,invulnerable:target.invuln>0||Date.now()<(target.protectedUntil||0)});
     if(this.combat.state!=='attack'||result.attackStarted)this.yaw=Math.atan2(dx,dz);
     if(result.attackStarted){this.attackId++;this.targetId=target.id;}
     if(result.move){
@@ -74,7 +89,7 @@ export class RoomBoss {
         if(y!==null){this.position={x,y,z};break;}
       }
     }
-    if(result.hit){target.hp=Math.max(0,target.hp-result.hit);target.invuln=.6;events.push({id:target.id,hp:target.hp,damage:result.hit,cause:'mist-boss'});}
+    if(result.hit){target.hp=Math.max(0,target.hp-result.hit);target.invuln=.6;if(!target.hp)target.manualRespawn=true;events.push({id:target.id,hp:target.hp,damage:result.hit,cause:'mist-boss'});}
     return events;
   }
   snapshot(){return {id:'mist-boss',kind:'mist-boss',...this.position,yaw:this.yaw,hp:this.hp,maxHp:1500,

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { BossCombat } from './boss-combat.mjs';
-import { findStandY, hasLineOfSight } from './boss-navigation.mjs';
+import { BossCombat } from './boss-combat.js';
+import { findStandY, hasLineOfSight } from './boss-navigation.js';
 
 /** The original Mist Archives heroine rig, with an added local sword animation. */
 export class MistBoss {
@@ -42,11 +42,16 @@ export class MistBoss {
     this.actions.idle.play();
     this.mixer.update(0);
     this.model.rotation.y = -Math.PI / 2; // source faces -X; actor forward is +Z
-    this.group.updateWorldMatrix(true, true);
+    this.group.updateMatrixWorld(true);
     const bounds = new THREE.Box3().setFromObject(this.model);
     const size = bounds.getSize(new THREE.Vector3());
     const scale = 2.1 / size.y;
     this.model.scale.multiplyScalar(scale);
+    const center = bounds.getCenter(new THREE.Vector3());
+    // The source scene includes authoring offsets; center the rendered rig on
+    // its collision body without changing the user's chosen facing direction.
+    this.model.position.x -= (center.x - this.group.position.x) * scale;
+    this.model.position.z -= (center.z - this.group.position.z) * scale;
     this.model.position.y -= (bounds.min.y - this.group.position.y) * scale;
     const bone = name => {
       let result;

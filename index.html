@@ -5,12 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <meta name="description" content="像素方块世界 - 单机存档 / 真实联机房间" />
   <title>像素方块世界</title>
-  <link rel="stylesheet" href="/styles/main.css?v=mistboss1" />
+  <link rel="stylesheet" href="styles/main.css?v=mistboss2" />
   <script type="importmap">
   {
     "imports": {
-      "three": "/vendor/three/three.module.js",
-      "three/addons/": "/vendor/three/addons/"
+      "three": "./vendor/three/three.module.js",
+      "three/addons/": "./vendor/three/addons/"
     }
   }
   </script>
@@ -28,9 +28,11 @@
     <div class="controls-body">
       <div class="control-row"><span class="key">W A S D</span><span>移动</span></div>
       <div class="control-row"><span class="key">鼠标</span><span>视角</span></div>
-      <div class="control-row"><span class="key">左键</span><span>攻击 / 破坏</span></div>
+      <div class="control-row"><span class="key">左键</span><span>攻击 / 破坏 / AK 连射</span></div>
       <div class="control-row"><span class="key">右键</span><span>放置（耗背包）</span></div>
       <div class="control-row"><span class="key">`</span><span>管理面板</span></div>
+      <div class="control-row"><span class="key">Q</span><span>装备 / 收起 AK</span></div>
+      <div class="control-row"><span class="key">Shift</span><span>冲刺</span></div>
       <div class="control-row"><span class="key">G</span><span>点燃地狱门</span></div>
       <div class="control-row"><span class="key">C</span><span>木头→木板</span></div>
       <div class="control-row"><span class="key">F</span><span>吃肉回血</span></div>
@@ -165,6 +167,6 @@
     <div id="mobileHotbar"></div>
   </div>
 
-  <script type="module" src="/js/game.js?v=mistboss1"></script>
+  <script type="module" src="js/game.js?v=mistboss2"></script>
 </body>
 </html>
