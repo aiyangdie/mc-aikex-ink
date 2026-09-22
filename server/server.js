@@ -117,6 +117,7 @@ class Room {
     this.seed = SEED;
     this.title = title;
     this.hostName = hostName;
+    this.hostId = null;
     this.edits = new Map();
     this.peers = new Map();
     this.mobs = new Map();
@@ -198,11 +199,18 @@ class Room {
     for (const [ws, p] of this.peers) {
       if (ws === exceptWs) continue;
       list.push({
-        ...combat.state(p), name: p.name, color: p.color,
+        ...combat.state(p), name: p.name, color: p.color, host: !!p.isHost,
         x: p.x, y: p.y, z: p.z, yaw: p.yaw, pitch: p.pitch,
       });
     }
     return list;
+  }
+
+  adminTargets() {
+    return [...this.peers.values()].map((p) => ({
+      id: p.id, name: p.name, hp: p.hp, maxHp: 20,
+      dimension: p.dimension, host: !!p.isHost,
+    }));
   }
 
   playerNames() {
@@ -338,7 +346,7 @@ function leaveRoom(ws) {
   const peer = ws._peer;
   if (!peer || !peer.room) return;
   const room = peer.room;
-  const wasHost = peer.name === room.hostName;
+  const wasHost = !!peer.isHost;
   room.peers.delete(ws);
   room.broadcast({ t: 'bye', id: peer.id });
   peer.room = null;
@@ -348,7 +356,12 @@ function leaveRoom(ws) {
     schedulePersist();
   } else if (wasHost) {
     const next = room.peers.values().next().value;
-    if (next) room.hostName = next.name;
+    if (next) {
+      room.hostName = next.name;
+      room.hostId = next.id;
+      next.isHost = true;
+      room.broadcast({ t: 'peer', ...combat.state(next), id: next.id, name: next.name, color: next.color, host: true });
+    }
     schedulePersist();
   }
 }
@@ -370,14 +383,16 @@ function joinRoom(ws, room, name) {
   room.emptyAt = 0;
   const id = genId();
   const color = COLORS[room.peers.size % COLORS.length];
+  const isHost = room.peers.size === 0;
   const peer = {
     id,
     name: (name || '玩家').slice(0, 12),
     color,
     ...room.collision.spawn(), yaw: 0, pitch: -0.1,
     hp:20, active:false, invuln:0, dimension:'overworld', lastBossHit:-Infinity,
-    room, lastMove: 0,
+    room, lastMove: 0, isHost, lockedUntil: 0,
   };
+  if (isHost) room.hostId = id;
   combat.init(peer);
   ws._peer = peer;
   room.peers.set(ws, peer);
@@ -399,12 +414,14 @@ function joinRoom(ws, room, name) {
     edits: room.editsArray(),
     players: room.playersList(ws),
     mobs: room.mobsArray(),
+    host: isHost,
+    roomAdmin: isHost,
   });
   room.broadcast({
     t: 'peer',
     ...combat.state(peer),
     id, name: peer.name, color,
-    x: peer.x, y: peer.y, z: peer.z, yaw: peer.yaw, pitch: peer.pitch,
+    x: peer.x, y: peer.y, z: peer.z, yaw: peer.yaw, pitch: peer.pitch, host: isHost,
   }, ws);
 }
 
@@ -539,7 +556,9 @@ wss.on('connection', (ws) => {
 
     // —— 管理鉴权（可不在房间内）——
     if (msg.t === 'admin_auth') {
-      const role = resolveRole(String(msg.key || ''), String(msg.name || ''));
+      const roomOwner = String(msg.key || '') === 'room-owner'
+        && ws._peer?.room && ws._peer.isHost;
+      const role = roomOwner ? 'room-owner' : resolveRole(String(msg.key || ''), String(msg.name || ''));
       if (!role) {
         adminLog(`auth FAIL from ${msg.name || '?'}`);
         send(ws, { t: 'err', msg: '密钥无效' });
@@ -558,6 +577,7 @@ wss.on('connection', (ws) => {
         role,
         token,
         admins: role === 'owner' ? publicAdmins() : undefined,
+        targets: role === 'room-owner' ? ws._peer.room.adminTargets() : undefined,
       });
       return;
     }
@@ -565,17 +585,52 @@ wss.on('connection', (ws) => {
     if (msg.t === 'admin_cmd') {
       const key = String(msg.key || ws._adminKey || '');
       let role = ws._adminRole || resolveRole(key, ws._peer?.name || '');
-      // 房主对本房有限权限：刷怪
-      if (!role && ws._peer?.room && msg.cmd === 'spawn'
-          && ws._peer.name === ws._peer.room.hostName) {
-        role = 'admin';
-      }
+      // 房主权限只对当前房间生效，且每条命令都重新确认房主身份。
+      if (role === 'room-owner' && !ws._peer?.room?.peers?.has(ws)) role = null;
+      if (role === 'room-owner' && !ws._peer.isHost) role = null;
       if (!role) {
         adminLog(`cmd DENY ${msg.cmd}`);
         send(ws, { t: 'err', msg: '无管理权限' });
         return;
       }
       ws._adminRole = role;
+
+      const room = ws._peer?.room;
+      const roomCommand = ['targets', 'lock', 'give', 'heal', 'spawn', 'clear_mobs'].includes(msg.cmd);
+      if (role === 'room-owner' && !roomCommand) {
+        send(ws, { t: 'err', msg: '房主管理员只能管理当前房间' });
+        return;
+      }
+
+      if (msg.cmd === 'targets') {
+        if (!room) { send(ws, { t: 'err', msg: '请先进入房间' }); return; }
+        send(ws, { t: 'admin_ok', targets: room.adminTargets() });
+        return;
+      }
+
+      if (msg.cmd === 'lock' || msg.cmd === 'heal' || msg.cmd === 'give') {
+        if (!room) { send(ws, { t: 'err', msg: '请先进入房间' }); return; }
+        const target = [...room.peers.values()].find((p) => p.id === String(msg.target || ''));
+        if (!target) { send(ws, { t: 'err', msg: '目标玩家不存在' }); return; }
+        if (msg.cmd === 'lock') {
+          const duration = Math.max(1000, Math.min(10000, Number(msg.duration) || 1000));
+          target.lockedUntil = Date.now() + duration;
+          room.broadcast({ t: 'admin_effect', effect: 'lock', id: target.id, duration, by: ws._peer.id });
+          adminLog(`lock ${target.name} ${duration}ms in ${room.code} by ${ws._peer.name}`);
+        } else if (msg.cmd === 'heal') {
+          target.hp = 20;
+          target.deadUntil = 0;
+          room.broadcast({ t: 'admin_effect', effect: 'heal', id: target.id, hp: 20, by: ws._peer.id });
+          adminLog(`heal ${target.name} in ${room.code} by ${ws._peer.name}`);
+        } else {
+          const typeId = Math.max(0, Math.min(200, Number(msg.typeId) | 0));
+          const count = Math.max(1, Math.min(64, Number(msg.count) | 0 || 1));
+          room.broadcast({ t: 'admin_effect', effect: 'give', id: target.id, typeId, count, by: ws._peer.id });
+          adminLog(`give ${target.name} type=${typeId} x${count} in ${room.code} by ${ws._peer.name}`);
+        }
+        send(ws, { t: 'admin_ok', targets: room.adminTargets() });
+        return;
+      }
 
       if (msg.cmd === 'op_list') {
         if (role !== 'owner') {
@@ -649,16 +704,16 @@ wss.on('connection', (ws) => {
           send(ws, { t: 'admin_ok', note: 'local_only' });
           return;
         }
+        const allowed = new Set(['pig','cow','chicken','duck','deer','horse','donkey','scout','heavy','dragon']);
+        const catalog = loadCatalog();
+        for (const item of catalog.mobs || []) if (item.kind) allowed.add(String(item.kind));
         const kind = String(msg.kind || 'pig');
+        if (!allowed.has(kind)) { send(ws, { t: 'err', msg: '不支持的实体类型' }); return; }
+        const count = Math.max(1, Math.min(8, Number(msg.count) | 0 || 1));
         // 在房内广播，让各客户端本地刷一只（位置用发起者坐标）
-        room.broadcast({
-          t: 'admin_spawn',
-          kind,
-          x: peer.x, y: peer.y, z: peer.z,
-          by: peer.id,
-        });
-        adminLog(`spawn ${kind} in ${room.code} by ${peer.name}`);
-        send(ws, { t: 'admin_ok', ok: true });
+        room.broadcast({ t: 'admin_spawn', kind, count, x: peer.x, y: peer.y, z: peer.z, by: peer.id });
+        adminLog(`spawn ${kind} x${count} in ${room.code} by ${peer.name}`);
+        send(ws, { t: 'admin_ok', ok: true, targets: room.adminTargets() });
         return;
       }
 
@@ -834,6 +889,10 @@ wss.on('connection', (ws) => {
 
     if (msg.t === 'move') {
       const now = Date.now();
+      if (peer.lockedUntil > now) {
+        send(ws, { t: 'admin_effect', effect: 'lock', id: peer.id, duration: peer.lockedUntil - now });
+        return;
+      }
       if (now - peer.lastMove < MOVE_MIN_MS) return;
       peer.lastMove = now;
       if (!['x','y','z','yaw','pitch'].every(k=>Number.isFinite(msg[k]))) return;
@@ -854,9 +913,9 @@ wss.on('connection', (ws) => {
 
     if (msg.t === 'name') {
       peer.name = String(msg.name || peer.name).slice(0, 12);
-      if (room.hostName === peer.name || room.peers.size === 1) room.hostName = peer.name;
+      if (peer.isHost) room.hostName = peer.name;
       room.broadcast({
-        t: 'peer', id: peer.id, name: peer.name, color: peer.color,
+        t: 'peer', id: peer.id, name: peer.name, color: peer.color, host: !!peer.isHost,
         x: peer.x, y: peer.y, z: peer.z, yaw: peer.yaw, pitch: peer.pitch,
       }, ws);
       schedulePersist();
