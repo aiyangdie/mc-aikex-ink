@@ -105,6 +105,7 @@ class Player {
   update(dt) {
     // 限制最大帧间隔，防止穿墙
     dt = Math.min(dt, 0.05);
+    const adminLocked = performance.now() < (this.lockedUntil || 0);
     if (this.attackCooldown > 0) this.attackCooldown -= dt;
     if (this.invuln > 0) this.invuln -= dt;
 
@@ -123,10 +124,12 @@ class Player {
 
     // 根据输入计算目标速度
     const moveDir = new THREE.Vector3(0, 0, 0);
-    if (this.keys['KeyW'] || this.keys['ArrowUp']) moveDir.add(forward);
-    if (this.keys['KeyS'] || this.keys['ArrowDown']) moveDir.sub(forward);
-    if (this.keys['KeyA'] || this.keys['ArrowLeft']) moveDir.sub(right);
-    if (this.keys['KeyD'] || this.keys['ArrowRight']) moveDir.add(right);
+    if (!adminLocked) {
+      if (this.keys['KeyW'] || this.keys['ArrowUp']) moveDir.add(forward);
+      if (this.keys['KeyS'] || this.keys['ArrowDown']) moveDir.sub(forward);
+      if (this.keys['KeyA'] || this.keys['ArrowLeft']) moveDir.sub(right);
+      if (this.keys['KeyD'] || this.keys['ArrowRight']) moveDir.add(right);
+    }
 
     if (moveDir.lengthSq() > 0) {
       moveDir.normalize();
@@ -155,8 +158,8 @@ class Player {
     // 管理飞行：空格上升，Shift 下降，无重力
     if (this.adminFly) {
       this.velocity.y = 0;
-      if (this.keys['Space'] || this.keys['KeyK']) this.velocity.y = 8;
-      if (this.keys['ShiftLeft'] || this.keys['ShiftRight']) this.velocity.y = -8;
+      if (!adminLocked && (this.keys['Space'] || this.keys['KeyK'])) this.velocity.y = 8;
+      if (!adminLocked && (this.keys['ShiftLeft'] || this.keys['ShiftRight'])) this.velocity.y = -8;
       this.position.x += this.velocity.x * dt;
       this.position.y += this.velocity.y * dt;
       this.position.z += this.velocity.z * dt;
@@ -190,7 +193,7 @@ class Player {
     }
 
     // 跳跃（仅在地面且不在水中）
-    if (!inWater && (this.keys['Space'] || this.keys['KeyK']) && this.onGround) {
+    if (!adminLocked && !inWater && (this.keys['Space'] || this.keys['KeyK']) && this.onGround) {
       this.velocity.y = this.jumpSpeed;
       this.onGround = false;
     }
@@ -1402,7 +1405,7 @@ export class Game {
 
   /** 左键：优先打怪，否则破坏方块 */
   _primaryAction() {
-    if (this.player.hp <= 0) return;
+    if (this.player.hp <= 0 || performance.now() < (this.player.lockedUntil || 0)) return;
     if (this.combat?.armed) { this.combat.shoot(); return; }
     if (!this.isRunning) return;
     this._refreshEntityTarget();
@@ -1424,7 +1427,7 @@ export class Game {
 
   /** 右键：食物则吃；炸弹投放；否则放置 */
   _secondaryAction() {
-    if (this.player.hp <= 0 || this.combat?.armed) return;
+    if (this.player.hp <= 0 || performance.now() < (this.player.lockedUntil || 0) || this.combat?.armed) return;
     if (!this.isRunning) return;
     const type = this.inventory.selectedType(this.selectedSlot);
     if (!type) {
@@ -2226,6 +2229,7 @@ export class Game {
       this._dirtySinceSave = true;
     });
     this.net.on('peer', (msg) => {
+      if (msg.host && msg.id === this.net.id) this.adminPanel?.autoRoomOwner?.();
       if (msg.id === this.net.id) return;
       this.remotes.upsert(msg);
       this._updateRoomHud();
@@ -2277,7 +2281,26 @@ export class Game {
     });
     this.net.on('admin_spawn', (msg) => {
       if (!msg || msg.by === this.net.id) return; // 发起者本地已刷
-      this._adminSpawnAt(msg.kind, msg.x, msg.y, msg.z);
+      const count = Math.max(1, Math.min(8, msg.count | 0 || 1));
+      for (let i = 0; i < count; i++) {
+        this._adminSpawnAt(msg.kind, msg.x + (i % 3) * 1.4, msg.y, msg.z + Math.floor(i / 3) * 1.4);
+      }
+    });
+    this.net.on('admin_effect', (msg) => {
+      if (!msg || msg.id !== this.net.id) return;
+      if (msg.effect === 'lock') {
+        this.player.lockedUntil = performance.now() + Math.max(250, Number(msg.duration) || 1000);
+        this.player.keys = {};
+        this._showSaveToast('房主将你定身了');
+      } else if (msg.effect === 'heal') {
+        this.player.hp = this.player.maxHp;
+        this._updateHpHud();
+        this._showSaveToast('房主给你恢复了生命');
+      } else if (msg.effect === 'give') {
+        const got = this.inventory.add(msg.typeId | 0, msg.count | 0);
+        this._updateHotbar();
+        this._showSaveToast(`房主赠送道具 ×${got}`);
+      }
     });
   }
 
@@ -2317,7 +2340,7 @@ export class Game {
     this._showSaveToast(this.player.adminFly ? '飞行开启（空格↑ Shift↓）' : '飞行关闭');
   }
 
-  adminSpawn(kind) {
+  adminSpawn(kind, count = 1) {
     if (!this.adminPanel?.authed) return;
     const origin = this.camera.position.clone();
     const dir = new THREE.Vector3(
@@ -2333,8 +2356,11 @@ export class Game {
       y = this.player.targetBlock.y + 1;
       z = this.player.targetBlock.z + 0.5;
     }
-    this._adminSpawnAt(kind, x, y, z);
-    this._showSaveToast(`已生成 ${kind}`);
+    const total = Math.max(1, Math.min(8, count | 0));
+    for (let i = 0; i < total; i++) {
+      this._adminSpawnAt(kind, x + (i % 3) * 1.4, y, z + Math.floor(i / 3) * 1.4);
+    }
+    this._showSaveToast(`已生成 ${kind} ×${total}`);
   }
 
   _adminSpawnAt(kind, x, y, z) {
@@ -2415,6 +2441,7 @@ export class Game {
   _enterFromOnline(msg) {
     this._clearMistBoss();
     this._online = true;
+    if (msg.roomAdmin) this.adminPanel?.autoRoomOwner?.();
     this._hostWaiting = false;
     this.net.startHeartbeat();
     this._applyRoomState(msg);
