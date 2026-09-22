@@ -21,6 +21,7 @@ async function main() {
 const { RoomBoss, CollisionWorld } = await import('./room-boss.mjs');
 const { RoomTerrain } = await import('./room-terrain.mjs');
 const { isNukeCode, sanitizeChat } = await import('./room-chat.mjs');
+const { resolveNuke } = await import('./room-nuke.mjs');
 const { getFoodHeal } = await import('../js/items.js');
 const PORT = Number(process.env.PORT || 3040);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -118,6 +119,7 @@ class Room {
     this.terrain = new RoomTerrain(MAX_EDITS);
     this.edits = this.terrain.getEdits();
     this.terrainRevision = 0;
+    this.lastNukeAt=0;
     this.peers = new Map();
     this.mobs = new Map();
     this.spells = new Spells();
@@ -204,7 +206,7 @@ class Room {
       title: this.title,
       seed: this.seed,
       edits: this.editsArray(),
-      hostId:this.hostId||null,editsByDimension:this.terrain.toJSON(),terrainRevision:this.terrainRevision,
+      hostId:this.hostId||null,editsByDimension:this.terrain.toJSON(),terrainRevision:this.terrainRevision,lastNukeAt:this.lastNukeAt,
       players: this.playersList(ws),
       playersCount: this.peers.size,
       mobs: this.mobsArray(),
@@ -246,7 +248,7 @@ class Room {
       hostName: this.hostName,
       boss: this.boss.snapshot(),
       seed: this.seed,
-      edits: this.editsArray(),editsByDimension:this.terrain.toJSON(),terrainRevision:this.terrainRevision,
+      edits: this.editsArray(),editsByDimension:this.terrain.toJSON(),terrainRevision:this.terrainRevision,lastNukeAt:this.lastNukeAt,
       createdAt: this.createdAt,
       lastActive: this.lastActive,
     };
@@ -260,6 +262,7 @@ class Room {
     room.terrain=RoomTerrain.fromPersist(row,MAX_EDITS);
     room.edits=room.terrain.getEdits();
     room.terrainRevision=Number.isSafeInteger(row.terrainRevision)?row.terrainRevision:0;
+    room.lastNukeAt=Number.isFinite(row.lastNukeAt)?row.lastNukeAt:0;
     room.collision = new CollisionWorld(room.seed, room.edits);
     room.boss = new RoomBoss(room.collision, row.boss || undefined);
     room.emptyAt = Date.now(); // 重启后无人，走宽限
@@ -383,7 +386,7 @@ function joinRoom(ws, room, name) {
     seed: room.seed,
     color,
     edits: room.editsArray(),
-    hostId:room.hostId||null,editsByDimension:room.terrain.toJSON(),terrainRevision:room.terrainRevision,
+    hostId:room.hostId||null,editsByDimension:room.terrain.toJSON(),terrainRevision:room.terrainRevision,lastNukeAt:room.lastNukeAt,
     players: room.playersList(ws),
     mobs: room.mobsArray(),
   });
@@ -697,7 +700,16 @@ wss.on('connection', (ws) => {
       const now=Date.now(),text=sanitizeChat(msg.text);
       if(!text||!peer.active||peer.hp<=0||now-(peer.lastChatAt||0)<500)return;
       peer.lastChatAt=now;
-      if(isNukeCode(msg.text)){send(ws,{t:'err',msg:'核弹功能尚未就绪'});return;}
+      if(isNukeCode(msg.text)){
+        const event=resolveNuke(room,peer,now);
+        if(!event){send(ws,{t:'err',msg:'核弹冷却中或地形改动容量不足'});return;}
+        room.broadcast({t:'nuke',...event});
+        room.broadcast({t:'mobs',list:[]});
+        room.broadcast({t:'boss',boss:room.boss.snapshot()});
+        for(const victim of room.peers.values())if(victim!==peer)
+          room.broadcast({t:'combat',...combat.state(victim),cause:'nuke'});
+        return;
+      }
       room.broadcast({t:'chat',by:peer.name,text});return;
     }
     if (msg.t === 'sync') {

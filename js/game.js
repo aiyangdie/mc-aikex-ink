@@ -1808,7 +1808,7 @@ export class Game {
     this.ui.pauseScreen.style.display = 'none';
     this._showGameUI(false);
     document.getElementById('deathReason').textContent = this._lastDamageBy === 'mist-boss'
-      ? '你被迷雾档案的主人公击败了' : '生命值已耗尽';
+      ? '你被迷雾档案的主人公击败了' : this._lastDamageBy === 'nuke' ? '你被核弹击中了' : '生命值已耗尽';
     document.getElementById('deathScreen').hidden = false;
     if (document.pointerLockElement) document.exitPointerLock();
     this.isPointerLocked = false;
@@ -2119,10 +2119,29 @@ export class Game {
 
   /** 联机事件绑定 */
   _bindNet() {
-    this.net.on('combat', msg => this.combat?.receive(msg));
+    this.net.on('combat', msg => {
+      this.combat?.receive(msg);
+      if(msg.id===this.net.id&&msg.hp<=0&&msg.cause==='nuke'){this._lastDamageBy='nuke';this._showDeathScreen();}
+    });
     this.net.on('shot', msg => this.combat?.trace(msg));
     this.net.on('boss', msg => this._syncOnlineBoss(msg.boss));
     this.net.on('chat',msg=>this.roomChat?.append(msg.by,msg.text));
+    this.net.on('nuke',msg=>{
+      if(Number.isSafeInteger(msg.sequence)&&msg.sequence<=this._terrainRevision)return;
+      this._terrainRevision=msg.sequence;
+      const edits=this._dimEdits[msg.dimension];
+      if(!edits||!Array.isArray(msg.edits))return;
+      this._netApplying=true;
+      for(const [x,y,z,b] of msg.edits){
+        if(![x,y,z,b].every(Number.isFinite))continue;
+        if(msg.dimension===this.dimension)this.world.setBlock(x,y,z,b);
+        else edits.set([x,y,z].join(','),b);
+      }
+      this._netApplying=false;
+      this.animalManager?.syncFromNet([]);
+      this._showSaveToast('核弹爆炸！地形已改变');
+      this.player.addShake?.(.12);
+    });
     this.net.on('vitals', msg => {
       if (!this._online || this._hostWaiting || !Number.isFinite(msg.hp)) return;
       this.player.hp = Math.max(0,Math.min(20,msg.hp));
