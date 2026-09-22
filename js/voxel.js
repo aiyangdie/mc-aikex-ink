@@ -3,7 +3,8 @@
  * 包含：方块定义、纹理图集、区块管理、世界生成、Coze 文字立墙
  */
 
-import * as THREE from 'three';
+// Shared with the headless server collision world; same pinned build as the import map.
+import * as THREE from '../vendor/three/three.module.js';
 import { SimplexNoise } from './noise.js?v=lobby10';
 
 /* ============================================

@@ -15,6 +15,8 @@ import { NetClient, RemotePlayers } from './net.js?v=lobby10';
 import { Inventory } from './inventory.js?v=lobby10';
 import { isFood, isItem, getItemName, getItemColor, getFoodHeal } from './items.js?v=lobby10';
 import { tryLightPortal, standingInPortal, spawnReturnPortal } from './portals.js?v=lobby10';
+import { MistBoss } from './mist-boss.js';
+import { findStandY } from './boss-navigation.mjs';
 import { EnderDragon } from './dragon.js?v=lobby10';
 import { AdminPanel } from './admin-panel.js?v=lobby10';
 import { buildStructure } from './structures.js?v=lobby10';
@@ -665,7 +667,7 @@ class TouchController {
 /* ============================================
    游戏主类
    ============================================ */
-class Game {
+export class Game {
   constructor() {
     this.canvas = document.getElementById('gameCanvas');
     this.isRunning = false;
@@ -736,6 +738,11 @@ class Game {
     this._portalTimer = 0;
     this._dragon = null;
     this._dragonKilled = false;
+    this._mistBoss = null;
+    this._mistBossState = null;
+    this._dead = false;
+    this._lastDamageBy = '';
+    this._netBossState = null;
   }
 
   /** 初始化游戏 */
@@ -765,6 +772,7 @@ class Game {
     // 读档：先灌差分，再生成区块（背景预览即是存档世界）
     this._saveData = SaveManager.load();
     if (this._saveData) {
+      this._mistBossState = this._saveData.mistBoss || null;
       this.world.edits = SaveManager.arrayToEdits(this._saveData.edits);
       if (Array.isArray(this._saveData.inventory)) {
         this.inventory.fromJSON(this._saveData.inventory);
@@ -772,7 +780,7 @@ class Game {
         this.inventory.giveStarter();
       }
       if (typeof this._saveData.hp === 'number') {
-        this.player.hp = Math.max(1, Math.min(20, this._saveData.hp));
+        this.player.hp = Math.max(0, Math.min(20, this._saveData.hp));
       }
       if (typeof this._saveData.selectedSlot === 'number') {
         this.selectedSlot = Math.max(0, Math.min(8, this._saveData.selectedSlot));
@@ -1087,6 +1095,7 @@ class Game {
   _initEvents() {
     // 键盘事件（桌面端 + 移动端外接键盘通用）
     document.addEventListener('keydown', (e) => {
+      if (this._dead) return;
       this.player.keys[e.code] = true;
 
       // 数字键选择热栏 1-9
@@ -1139,13 +1148,13 @@ class Game {
 
     // 鼠标移动（仅桌面端指针锁定后）
     document.addEventListener('mousemove', (e) => {
-      if (!this.isPointerLocked) return;
+      if (!this.isPointerLocked || this._dead) return;
       this.player.onMouseMove(e.movementX, e.movementY);
     });
 
     // 鼠标：左键攻击/破坏，右键放置（对标我的世界）
     document.addEventListener('mousedown', (e) => {
-      if (!this.isPointerLocked) return;
+      if (!this.isPointerLocked || this._dead) return;
       if (e.button === 0) this._primaryAction();
       else if (e.button === 2) this._secondaryAction();
     });
@@ -1155,7 +1164,7 @@ class Game {
 
     // 滚轮切换方块（仅桌面端指针锁定后）
     document.addEventListener('wheel', (e) => {
-      if (!this.isPointerLocked) return;
+      if (!this.isPointerLocked || this._dead) return;
 
       // Ctrl + 滚轮 / 触控板双指缩放 → 调整视野
       // 捏合(deltaY>0) = 缩小画面 = 视野变广(FOV变大)；推开(deltaY<0) = 放大画面 = 视野变窄(FOV变小)
@@ -1176,6 +1185,11 @@ class Game {
     if (!this.isMobile) {
       document.addEventListener('pointerlockchange', () => {
         this.isPointerLocked = document.pointerLockElement === this.canvas;
+        if (this._dead) {
+          if (this.isPointerLocked) document.exitPointerLock();
+          this.ui.pauseScreen.style.display = 'none';
+          return;
+        }
         if (this.isPointerLocked) {
           this.ui.pauseScreen.style.display = 'none';
           this._showGameUI(true);
@@ -1186,8 +1200,15 @@ class Game {
       });
 
       const requestLock = () => {
-        if (!this.isPointerLocked && this.isRunning) {
-          this.canvas.requestPointerLock();
+        if (!this.isPointerLocked && this.isRunning && !this._dead) {
+          const retry = () => {
+            if (!this._dead && this.isRunning) this.ui.pauseScreen.style.display = 'flex';
+          };
+          try {
+            // Joining a room awaits a socket reply; some browsers no longer
+            // consider it a user gesture. Offer an explicit resume click.
+            this.canvas.requestPointerLock()?.catch(retry);
+          } catch { retry(); }
         }
       };
 
@@ -1301,7 +1322,8 @@ class Game {
     }
     if (!this.inventory.consume(this.selectedSlot, 1)) return;
     const heal = getFoodHeal(type);
-    this.player.hp = Math.min(this.player.maxHp, this.player.hp + heal);
+    if (this._online) this.net._send({t:'eat',item:type});
+    else this.player.hp = Math.min(this.player.maxHp, this.player.hp + heal);
     this._updateHotbar();
     this._updateHpHud();
     this._showSaveToast(`吃了${getItemName(type)} +${heal}❤`);
@@ -1340,6 +1362,20 @@ class Game {
 
   _attackMob(robot) {
     this.player.attackCooldown = 0.35;
+    if (robot === this._mistBoss) {
+      if (this._online) { this.net.sendHit('mist-boss',5); return; }
+      robot.takeDamage(5);
+      this._mistBossState = robot.toJSON();
+      this._dirtySinceSave = true;
+      if (robot.dead) {
+        robot.dispose();
+        this._mistBoss = null;
+        this._showSaveToast('迷雾档案 Boss 已击败！');
+        this._persist('boss-defeated');
+      }
+      this._updateBossHud();
+      return;
+    }
     // 末影龙本地权威（联机也各自打，掉落给击杀者）
     if (robot === this._dragon || robot?.kind === 'dragon') {
       const result = this._dragon.takeDamage(5);
@@ -1399,6 +1435,10 @@ class Game {
       const t = this._dragon.hitDistance(origin, dir, this.player.reachDistance + 4);
       if (t < bestT) { best = this._dragon; bestT = t; }
     }
+    if (this._mistBoss) {
+      const t = this._mistBoss.hitDistance(origin, dir, this.player.reachDistance);
+      if (t < bestT) { best = this._mistBoss; bestT = t; }
+    }
     let blockDist = Infinity;
     if (this.player.targetBlock) {
       const bx = this.player.targetBlock.x + 0.5 - origin.x;
@@ -1415,7 +1455,8 @@ class Game {
    * @param {{x,y,z}|null} spawn
    */
   async _switchDimension(dim, spawn = null) {
-    if (dim === this.dimension) return;
+    if (dim === this.dimension || this._dead) return;
+    this._clearMistBoss();
     this._showSaveToast(`穿越中 → ${dim === Dim.NETHER ? '地狱' : dim === Dim.END ? '末地' : '主世界'}…`);
 
     // 存当前维度差分
@@ -1504,9 +1545,154 @@ class Game {
     this.animalManager.spawnCenter.set(this.player.position.x, 0, this.player.position.z);
     if (!this._online) this.animalManager.spawnAnimals(dim);
 
+    this._ensureMistBoss();
     this._portalTimer = -2; // 防立刻回传
     this._updateDimHud();
     this._showSaveToast(dim === Dim.NETHER ? '已进入地狱 · 中央紫色台通往末地' : dim === Dim.END ? '末地 · 击败末影龙！' : '回到主世界');
+  }
+
+  /** Solo only: keep the new Boss out of the server's unsynchronized mob list. */
+  async _ensureMistBoss() {
+    if (this._online) { this._syncOnlineBoss(this._netBossState); return; }
+    if (this.dimension !== Dim.OVERWORLD || this._mistBoss || this._mistBossState?.hp === 0) return;
+    const p = this.player.position;
+    let spawn = this._mistBossState;
+    if (!spawn || ![spawn.x,spawn.y,spawn.z].every(Number.isFinite)) {
+      spawn = null;
+      for (const offset of [.65,-.65,1.2,-1.2,Math.PI]) {
+        const angle = this.player.yaw + offset;
+        const x=p.x-Math.sin(angle)*10, z=p.z-Math.cos(angle)*10;
+        const y=findStandY(this.world,x,z,p.y);
+        if (y !== null) { spawn={x,y,z,hp:1500}; break; }
+      }
+    }
+    if (!spawn) { this._showSaveToast('附近没有 Boss 可站立的位置'); return; }
+    const boss = new MistBoss(this.scene,this.world,spawn,spawn.hp);
+    this._mistBoss = boss;
+    this._updateBossHud();
+    try {
+      await boss.load();
+      if (this._mistBoss !== boss) return;
+      this._mistBossState = boss.toJSON();
+      this._updateBossHud();
+    } catch (error) {
+      console.error('迷雾档案 Boss 加载失败',error);
+      boss.dispose();
+      if (this._mistBoss === boss) {
+        this._mistBoss = null;
+        this._updateBossHud();
+        this._showSaveToast('Boss 模型加载失败，请刷新重试');
+      }
+    }
+  }
+
+  async _syncOnlineBoss(state) {
+    this._netBossState = state;
+    if (!this._online || this._hostWaiting || !state) return;
+    if (state.hp <= 0 || this.dimension !== Dim.OVERWORLD) {
+      if (state.hp <= 0 && this._mistBoss) this._showSaveToast('迷雾档案 Boss 已被大家击败！');
+      this._clearMistBoss();
+      return;
+    }
+    if (this._mistBoss?.netDriven) {
+      this._mistBoss.applyNetState(state);
+      this._updateBossHud();
+      return;
+    }
+    this._clearMistBoss();
+    const boss = new MistBoss(this.scene,this.world,state,state.hp);
+    this._mistBoss = boss;
+    boss.applyNetState(state);
+    try {
+      await boss.load();
+      if (this._mistBoss !== boss) return;
+      this._updateBossHud();
+    } catch (error) {
+      console.error('联机 Boss 模型加载失败',error);
+      boss.dispose();
+      // Keep the failed instance until leaving the room: no 5 Hz retry storm.
+      if (this._mistBoss === boss) this._showSaveToast('Boss 模型加载失败，请刷新重试');
+    }
+  }
+
+  _clearMistBoss() {
+    if (this._mistBoss) {
+      if (!this._mistBoss.netDriven) this._mistBossState = this._mistBoss.toJSON();
+      this._mistBoss.dispose();
+      this._mistBoss = null;
+    }
+    this._updateBossHud();
+  }
+
+  _updateBossHud(show = this.isRunning) {
+    const hud = document.getElementById('bossHud');
+    if (!hud) return;
+    const boss = this._mistBoss;
+    hud.hidden = !show || this._dead || !boss || boss.dead;
+    if (hud.hidden) return;
+    document.getElementById('bossHpText').textContent = `${boss.hp} / ${boss.maxHp}`;
+    document.getElementById('bossHealth').value = boss.hp;
+    document.getElementById('bossStatus').textContent = !boss.ready ? '角色载入中…' :
+      boss.combat.state === 'attack' ? '挥砍！拉开距离' : '保持距离 · 左键攻击';
+  }
+
+  _showDeathScreen() {
+    if (this._dead) return;
+    this._dead = true;
+    this.isRunning = false;
+    this.player.hp = 0;
+    this.player.keys = {};
+    this.player.velocity.set(0,0,0);
+    this.ui.pauseScreen.style.display = 'none';
+    this._showGameUI(false);
+    document.getElementById('deathReason').textContent = this._lastDamageBy === 'mist-boss'
+      ? '你被迷雾档案的主人公击败了' : '生命值已耗尽';
+    document.getElementById('deathScreen').hidden = false;
+    if (document.pointerLockElement) document.exitPointerLock();
+    this.isPointerLocked = false;
+    document.getElementById('btnRespawn').focus();
+    if (this._online) this.net._send({t:'player_hurt',hp:0});
+    this._persist('death');
+  }
+
+  _respawnPlayer(serverState = null) {
+    if (!this._dead) return;
+    if (this._online && !serverState) {
+      this.net._send({t:'respawn'});
+      return; // wait for authoritative HP and spawn; do not revive locally
+    }
+    const spawn = this.dimension === Dim.END ? new THREE.Vector3(0,24,0) :
+      this.dimension === Dim.NETHER ? new THREE.Vector3(21,16,8) :
+      (this._respawnPoint || new THREE.Vector3(9.5,19,18)).clone();
+    // The original spawn may have been mined out. Search nearby solid ground.
+    outer: for (let r=0;r<=8;r++) for (let x=-r;x<=r;x++) for (let z=-r;z<=r;z++) {
+      const y=findStandY(this.world,spawn.x+x,spawn.z+z,spawn.y);
+      if (y !== null) { spawn.set(spawn.x+x,y+.05,spawn.z+z); break outer; }
+    }
+    if (serverState) spawn.set(serverState.x,serverState.y,serverState.z);
+    this.player.position.copy(spawn);
+    this.player.velocity.set(0,0,0);
+    this.player.keys = {};
+    this.player.hp = this.player.maxHp;
+    this.player.invuln = 3;
+    this.player._fallVy = 0;
+    this.player._wasOnGround = true;
+    this.player.attackCooldown = 0;
+    if (this.touchController) { this.touchController.moveX = 0; this.touchController.moveZ = 0; }
+    this._lastDamageBy = '';
+    this._portalTimer = -3;
+    this._dead = false;
+    this.isRunning = true;
+    this.camera.position.copy(spawn).y += this.player.eyeHeight;
+    document.getElementById('deathScreen').hidden = true;
+    this.ui.pauseScreen.style.display = 'none';
+    this._showGameUI(true);
+    this._updateHpHud();
+    this._persist('respawn');
+    if (serverState && !this.isMobile) {
+      // The socket callback is not a user gesture; pointer lock needs a click.
+      this.ui.pauseScreen.style.display = 'flex';
+    } else this._requestLock?.();
   }
 
   _updateDimHud() {
@@ -1571,6 +1757,9 @@ class Game {
 
   /** 存档 UI：开始屏 / 暂停屏按钮 */
   _initSaveUI() {
+    document.getElementById('btnRespawn').addEventListener('click', (e) => {
+      e.stopPropagation(); this._respawnPlayer();
+    });
     const btnContinue = document.getElementById('btnContinue');
     const btnNewGame = document.getElementById('btnNewGame');
     const btnResume = document.getElementById('btnResume');
@@ -1587,6 +1776,7 @@ class Game {
           (World.TEXT_GROUND_Y || 18) + 1.1,
           this._starterPortalPos.z
         );
+        this.player.position.y = this.world.getSurfaceHeight(Math.floor(this.player.position.x), Math.floor(this.player.position.z)) + .05;
         this.player.yaw = -Math.PI / 2; // 面朝门
       }
       this.camera.position.set(
@@ -1611,9 +1801,12 @@ class Game {
       } else if (this._requestLock) {
         this._requestLock();
       }
+      this._respawnPoint = this.player.position.clone();
+      this._ensureMistBoss();
       this._startAutosave();
       this._persist('enter');
-      this._showSaveToast('紫色地狱门在眼前 → 走进去打龙！');
+      this._showSaveToast('迷雾档案 Boss 在附近 · 左键攻击，注意躲开挥砍！');
+      if (this.player.hp <= 0) this._showDeathScreen();
     };
 
     if (btnContinue) {
@@ -1703,6 +1896,7 @@ class Game {
   _persist(reason) {
     const pos = this.player.position;
     const r = SaveManager.save({
+      mistBoss: this._online ? this._mistBossState : (this._mistBoss?.toJSON() || this._mistBossState),
       seed: this.world.seed,
       selectedSlot: this.selectedSlot,
       hp: this.player.hp,
@@ -1736,6 +1930,25 @@ class Game {
 
   /** 联机事件绑定 */
   _bindNet() {
+    this.net.on('boss', msg => this._syncOnlineBoss(msg.boss));
+    this.net.on('vitals', msg => {
+      if (!this._online || this._hostWaiting || !Number.isFinite(msg.hp)) return;
+      this.player.hp = Math.max(0,Math.min(20,msg.hp));
+      if (msg.cause) this._lastDamageBy = msg.cause;
+      this._updateHpHud();
+      if (this.player.hp <= 0) this._showDeathScreen();
+    });
+    this.net.on('respawned', async msg => {
+      if (!this._online || !this._dead) return;
+      if (this.dimension !== msg.dimension) {
+        // Dimension transition normally refuses dead players. Complete it before
+        // reviving, keeping simulation stopped throughout the async reload.
+        this._dead = false;
+        await this._switchDimension(msg.dimension,msg);
+        this._dead = true;
+      }
+      this._respawnPlayer(msg);
+    });
     this.net.on('block', (msg) => {
       if (msg.by === this.net.id) return;
       this._netApplying = true;
@@ -1762,6 +1975,8 @@ class Game {
     });
     this.net.on('close', () => {
       if (this._online || this._hostWaiting) {
+        this._clearMistBoss();
+        this._netBossState = null;
         this._online = false;
         this._hostWaiting = false;
         this._showSaveToast('联机已断开');
@@ -1822,7 +2037,7 @@ class Game {
   }
 
   adminHeal() {
-    if (!this.adminPanel?.authed) return;
+    if (this._dead || !this.adminPanel?.authed) return;
     this.player.hp = this.player.maxHp;
     this._updateHpHud();
     this._showSaveToast('已满血');
@@ -1924,10 +2139,24 @@ class Game {
   }
 
   _enterFromOnline(msg) {
+    this._clearMistBoss();
     this._online = true;
     this._hostWaiting = false;
     this.net.startHeartbeat();
     this._applyRoomState(msg);
+    this._dead = false;
+    document.getElementById('deathScreen').hidden = true;
+    if (msg.self) {
+      this.player.position.set(msg.self.x,msg.self.y,msg.self.z);
+      this.player.hp = msg.self.hp;
+      this.player.velocity.set(0,0,0);
+      this.player.keys = {};
+      this.player.yaw = 0;
+      this.player.pitch = -.1;
+    }
+    this._respawnPoint = this.player.position.clone();
+    this._syncOnlineBoss(msg.boss);
+    this.net._send({t:'play'});
     this._updateRoomHud();
     const pauseInfo = document.getElementById('pauseRoomInfo');
     if (pauseInfo) {
@@ -1952,8 +2181,8 @@ class Game {
       this.player.position.y + this.player.eyeHeight,
       this.player.position.z
     );
-    if (this.isMobile) this._showGameUI(true);
-    else if (this._requestLock) this._requestLock();
+    this._showGameUI(true);
+    if (!this.isMobile && this._requestLock) this._requestLock();
     this._startAutosave();
     this._persist('enter');
     this._showSaveToast(`房间 ${msg.room} · 点左上角可复制邀请`);
@@ -2099,6 +2328,9 @@ class Game {
           room: snap.room || this.net.room,
           title: snap.title || this._pendingJoinMsg?.title,
           edits: snap.edits,
+          mobs: snap.mobs,
+          boss: snap.boss,
+          self: snap.self,
           players: snap.players,
           id: this.net.id,
           color: this.net.color,
@@ -2336,6 +2568,7 @@ class Game {
     const dim = document.getElementById('dimHud');
     if (dim) dim.style.display = show ? 'block' : 'none';
     if (show) this._updateDimHud();
+    this._updateBossHud(show);
     // 右上角操作说明面板（仅桌面端）
     if (!this.isMobile) {
       this.ui.controlsPanel.style.display = show ? 'flex' : 'none';
@@ -2440,23 +2673,32 @@ class Game {
     }
 
     // 桌面端指针锁定 或 移动端运行时更新游戏逻辑
-    if (this.isPointerLocked || (this.isMobile && this.isRunning)) {
+    if (!this._dead && this.isRunning && (this.isPointerLocked || this.isMobile)) {
+      const hpBefore = this.player.hp;
       this.player.update(dt);
+      if (this.player.hp < hpBefore) {
+        this._lastDamageBy = '';
+        if (this._online) this.net._send({t:'player_hurt',hp:this.player.hp});
+      }
       this.world.update(this.player.position.x, this.player.position.z);
       this.highlight.update(this.player.targetBlock);
       this._refreshEntityTarget();
       this._updateHpHud();
       this._tickPortal(dt);
-      if (this._online && this.net) this.net.tickMove(dt, this.player);
-      if (this.player.hp <= 0) {
-        this.player.hp = this.player.maxHp;
-        if (this.dimension === Dim.END) this.player.position.set(0, 24, 0);
-        else if (this.dimension === Dim.NETHER) this.player.position.set(21, 16, 8);
-        else this.player.position.set(this._spawnX || 5.4, (this._spawnY || 20) + 2, this._spawnZ || 22.6);
-        this._showSaveToast('你倒下了，已复活');
+      if (this._online && this.net) this.net.tickMove(dt, this.player, this.dimension);
+      const damage = !this._online ? (this._mistBoss?.update(dt, this.player) || 0) : 0;
+      if (damage > 0 && this.player.hp > 0) {
+        this.player.hp = Math.max(0, this.player.hp - damage);
+        this.player.invuln = .6;
+        this._lastDamageBy = 'mist-boss';
+        this._dirtySinceSave = true;
+        this._updateHpHud();
       }
+      this._updateBossHud();
+      if (this.player.hp <= 0) this._showDeathScreen();
     }
 
+    if (this._online && this._mistBoss) this._mistBoss.update(dt,this.player);
     if (this.remotes) this.remotes.update(dt, this.camera);
 
     if (this.animalManager) this.animalManager.update(dt);

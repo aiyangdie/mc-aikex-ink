@@ -1,0 +1,82 @@
+import {World,Chunk,CHUNK_SIZE,CHUNK_HEIGHT} from '../js/voxel.js';
+import {BossCombat} from '../js/boss-combat.mjs';
+import {findStandY,hasLineOfSight} from '../js/boss-navigation.mjs';
+
+// Reuse the actual generator, without WebGL/DOM. Cache only nearby base chunks;
+// edits are read on every query so placed walls immediately affect pursuit/hits.
+export class CollisionWorld {
+  constructor(seed,edits) { this.base=new World(null,seed); this.edits=edits; }
+  getBlock(x,y,z) {
+    if(y<0||y>=CHUNK_HEIGHT||Math.abs(x)>4096||Math.abs(z)>4096)return 0;
+    const key=`${x},${y},${z}`;
+    if(this.edits.has(key))return this.edits.get(key);
+    const cx=Math.floor(x/CHUNK_SIZE),cz=Math.floor(z/CHUNK_SIZE),ck=this.base.chunkKey(cx,cz);
+    if(!this.base.chunks.has(ck)) {
+      const chunk=new Chunk(cx,cz);this.base.generateChunkData(chunk);
+      if(this.base.chunks.size>=64)this.base.chunks.delete(this.base.chunks.keys().next().value);
+      this.base.chunks.set(ck,chunk);
+    }
+    return this.base.getBlock(x,y,z);
+  }
+  spawn(x=5.4,z=14.5) {
+    for(let radius=0;radius<=8;radius++)for(let dx=-radius;dx<=radius;dx++)for(let dz=-radius;dz<=radius;dz++){
+      for(let y=CHUNK_HEIGHT-3;y>0;y--){
+        const stand=findStandY(this,x+dx,z+dz,y);
+        if(stand!==null)return {x:x+dx,y:stand+.05,z:z+dz};
+      }
+    }
+    return {x:5.4,y:19.05,z:14.5};
+  }
+}
+
+export class RoomBoss {
+  constructor(world,saved={x:5.4,y:19,z:5.5}) {
+    this.world=world;
+    this.position={x:saved.x,y:saved.y,z:saved.z};
+    this.combat=new BossCombat(saved.hp);
+    this.yaw=saved.yaw||0;
+    this.attackId=0;
+    this.targetId=null;
+  }
+  get hp(){return this.combat.hp;}
+  eligible(p){return p.active&&p.hp>0&&p.dimension==='overworld';}
+  hit(peer,now=Date.now()) {
+    if(this.combat.dead||!this.eligible(peer)||now-(peer.lastBossHit??-Infinity)<350)return false;
+    if(Math.hypot(peer.x-this.position.x,peer.y-this.position.y,peer.z-this.position.z)>7)return false;
+    if(!hasLineOfSight(this.world,peer,this.position))return false;
+    peer.lastBossHit=now;this.combat.takeDamage(5);return true;
+  }
+  tick(dt,peers) {
+    const events=[];
+    for(const p of peers)p.invuln=Math.max(0,(p.invuln||0)-dt);
+    if(this.combat.dead)return events;
+    let target;
+    if(this.combat.state==='attack')target=peers.find(p=>p.id===this.targetId&&this.eligible(p));
+    else {
+      let nearest=32;
+      for(const p of peers) {
+        if(!this.eligible(p))continue;
+        const d=Math.hypot(p.x-this.position.x,p.z-this.position.z);
+        if(d<nearest&&hasLineOfSight(this.world,this.position,p)){target=p;nearest=d;}
+      }
+    }
+    if(!target){this.combat.step(dt,{playerAlive:false});return events;}
+    const dx=target.x-this.position.x,dz=target.z-this.position.z;
+    const result=this.combat.step(dt,{distance:Math.hypot(dx,dz),height:target.y-this.position.y,
+      visible:hasLineOfSight(this.world,this.position,target),playerAlive:true,invulnerable:target.invuln>0});
+    if(this.combat.state!=='attack'||result.attackStarted)this.yaw=Math.atan2(dx,dz);
+    if(result.attackStarted){this.attackId++;this.targetId=target.id;}
+    if(result.move){
+      const a=Math.atan2(dx,dz),step=3.4*Math.min(dt,.05);
+      for(const offset of [0,.65,-.65,1.2,-1.2]){
+        const x=this.position.x+Math.sin(a+offset)*step,z=this.position.z+Math.cos(a+offset)*step;
+        const y=findStandY(this.world,x,z,this.position.y);
+        if(y!==null){this.position={x,y,z};break;}
+      }
+    }
+    if(result.hit){target.hp=Math.max(0,target.hp-result.hit);target.invuln=.6;events.push({id:target.id,hp:target.hp,damage:result.hit,cause:'mist-boss'});}
+    return events;
+  }
+  snapshot(){return {id:'mist-boss',kind:'mist-boss',...this.position,yaw:this.yaw,hp:this.hp,maxHp:1500,
+    state:this.combat.state,attackId:this.attackId,attackTime:this.combat.attackTime,targetId:this.targetId};}
+}

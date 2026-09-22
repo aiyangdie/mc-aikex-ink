@@ -15,6 +15,9 @@ const path = require('path');
 const { WebSocketServer } = require('ws');
 const { URL } = require('url');
 
+async function main() {
+const { RoomBoss, CollisionWorld } = await import('./room-boss.mjs');
+const { getFoodHeal } = await import('../js/items.js');
 const PORT = Number(process.env.PORT || 3040);
 const HOST = process.env.HOST || '127.0.0.1';
 const OWNER_KEY = process.env.MC_OWNER_KEY || 'aikex-mc-2026';
@@ -24,10 +27,11 @@ const MAX_ROOMS = 64;
 const MAX_EDITS = 60000;
 const MOVE_MIN_MS = 50;
 const EMPTY_GRACE_MS = 120_000;
-const PERSIST_PATH = path.join(__dirname, 'data', 'rooms.json');
-const ADMINS_PATH = path.join(__dirname, 'data', 'admins.json');
-const CATALOG_PATH = path.join(__dirname, 'data', 'catalog.json');
-const ADMIN_LOG_PATH = path.join(__dirname, 'data', 'admin.log');
+const DATA_DIR = process.env.MC_DATA_DIR || path.join(__dirname, 'data');
+const PERSIST_PATH = path.join(DATA_DIR, 'rooms.json');
+const ADMINS_PATH = path.join(DATA_DIR, 'admins.json');
+const CATALOG_PATH = path.join(DATA_DIR, 'catalog.json');
+const ADMIN_LOG_PATH = path.join(DATA_DIR, 'admin.log');
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const COLORS = [0xe57373, 0x64b5f6, 0x81c784, 0xffb74d, 0xba68c8, 0x4dd0e1, 0xfff176, 0xf06292];
 
@@ -114,6 +118,8 @@ class Room {
     this.lastActive = Date.now();
     this.emptyAt = 0;
     this._spawnMobs();
+    this.collision = new CollisionWorld(this.seed, this.edits);
+    this.boss = new RoomBoss(this.collision);
   }
 
   _spawnMobs() {
@@ -199,6 +205,8 @@ class Room {
   snapshotFor(ws) {
     return {
       t: 'sync',
+      boss: this.boss.snapshot(),
+      self: this.peerState(this.peers.get(ws)),
       room: this.code,
       title: this.title,
       seed: this.seed,
@@ -207,6 +215,11 @@ class Room {
       playersCount: this.peers.size,
       mobs: this.mobsArray(),
     };
+  }
+
+  peerState(peer) {
+    if (!peer) return null;
+    return {hp:peer.hp,x:peer.x,y:peer.y,z:peer.z,dimension:peer.dimension};
   }
 
   broadcast(obj, exceptWs = null) {
@@ -237,6 +250,7 @@ class Room {
       code: this.code,
       title: this.title,
       hostName: this.hostName,
+      boss: this.boss.snapshot(),
       seed: this.seed,
       edits: this.editsArray(),
       createdAt: this.createdAt,
@@ -250,6 +264,8 @@ class Room {
     room.createdAt = row.createdAt || Date.now();
     room.lastActive = row.lastActive || Date.now();
     room.applyEditsArray(row.edits);
+    room.collision = new CollisionWorld(room.seed, room.edits);
+    room.boss = new RoomBoss(room.collision, row.boss || undefined);
     room.emptyAt = Date.now(); // 重启后无人，走宽限
     return room;
   }
@@ -348,7 +364,8 @@ function joinRoom(ws, room, name) {
     id,
     name: (name || '玩家').slice(0, 12),
     color,
-    x: 5.4, y: 22, z: 22.6, yaw: 0, pitch: -0.3,
+    ...room.collision.spawn(), yaw: 0, pitch: -0.1,
+    hp:20, active:false, invuln:0, dimension:'overworld', lastBossHit:-Infinity,
     room, lastMove: 0,
   };
   ws._peer = peer;
@@ -358,6 +375,8 @@ function joinRoom(ws, room, name) {
 
   send(ws, {
     t: 'joined',
+    boss: room.boss.snapshot(),
+    self: room.peerState(peer),
     room: room.code,
     title: room.title,
     id,
@@ -665,7 +684,44 @@ wss.on('connection', (ws) => {
       return;
     }
 
+    if (msg.t === 'play') {
+      peer.active = true;
+      send(ws, {t:'vitals',hp:peer.hp});
+      send(ws, {t:'boss',boss:room.boss.snapshot()});
+      return;
+    }
+    if (msg.t === 'respawn') {
+      if (peer.hp > 0) return;
+      Object.assign(peer, room.collision.spawn());
+      peer.hp=20; peer.invuln=3; peer.dimension='overworld'; peer.active=true;
+      send(ws,{t:'respawned',...room.peerState(peer)});
+      room.broadcast({t:'move',id:peer.id,x:peer.x,y:peer.y,z:peer.z,yaw:peer.yaw,pitch:peer.pitch},ws);
+      return;
+    }
+    if (msg.t === 'player_hurt') {
+      // Fall damage remains client-side like the existing voxel physics.
+      // Reports can only reduce HP; never accept a client-side heal here.
+      if (Number.isFinite(msg.hp)) peer.hp=Math.max(0,Math.min(peer.hp,msg.hp));
+      send(ws,{t:'vitals',hp:peer.hp});
+      return;
+    }
+    if (msg.t === 'eat') {
+      // Inventory is still client-owned in the original protocol.
+      // Restrict this command to known food amounts and a consumption cadence.
+      const now=Date.now();
+      const heal=getFoodHeal(msg.item);
+      if(peer.active&&peer.hp>0&&heal&&now-(peer.lastEat||0)>500){peer.lastEat=now;peer.hp=Math.min(20,peer.hp+heal);}
+      send(ws,{t:'vitals',hp:peer.hp});
+      return;
+    }
     if (msg.t === 'hit') {
+      if (msg.id === 'mist-boss') {
+        if (room.boss.hit(peer)) {
+          room.touch();
+          room.broadcast({t:'boss',boss:room.boss.snapshot()});
+        }
+        return;
+      }
       const result = room.hitMob(String(msg.id || ''), msg.dmg | 0 || 3, peer.id);
       if (!result) return;
       if (result.die) {
@@ -692,6 +748,9 @@ wss.on('connection', (ws) => {
       const now = Date.now();
       if (now - peer.lastMove < MOVE_MIN_MS) return;
       peer.lastMove = now;
+      if (!['x','y','z','yaw','pitch'].every(k=>Number.isFinite(msg[k]))) return;
+      if (Math.abs(msg.x)>4096||Math.abs(msg.z)>4096||msg.y < -128||msg.y>256) return;
+      peer.dimension = ['overworld','nether','end'].includes(msg.dimension) ? msg.dimension : 'overworld';
       peer.x = +msg.x || 0;
       peer.y = +msg.y || 0;
       peer.z = +msg.z || 0;
@@ -747,7 +806,21 @@ setInterval(() => {
   }
 }, 200);
 
-process.on('SIGINT', () => { persistNow(); process.exit(0); });
+// Boss authority at 20 Hz; animation/position snapshots at 5 Hz.
+let bossTick = 0;
+setInterval(() => {
+  bossTick++;
+  for (const room of rooms.values()) {
+    if (!room.peers.size) continue;
+    const events=room.boss.tick(.05,[...room.peers.values()]);
+    for (const event of events) {
+      for (const [ws,peer] of room.peers) if (peer.id===event.id) send(ws,{t:'vitals',...event});
+    }
+    if (bossTick%4===0) room.broadcast({t:'boss',boss:room.boss.snapshot()});
+  }
+},50);
+
+process.on('SIGINT' , () => { persistNow(); process.exit(0); });
 process.on('SIGTERM', () => { persistNow(); process.exit(0); });
 
 server.listen(PORT, HOST, () => {
@@ -765,3 +838,6 @@ function selfCheck() {
   console.log('[mc-ws] self-check ok');
 }
 selfCheck();
+
+}
+main().catch(error => { console.error('[mc-ws] startup failed', error); process.exitCode = 1; });
