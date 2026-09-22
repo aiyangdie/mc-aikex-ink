@@ -9,3 +9,9 @@
 - Review发现无cause的零HP vitals可能困住PvP自动复活，已按cause限制为Boss并加红绿回归。
 - 部署路径：PR→另一人Approve→main→GitHub Actions Deploy production（self-hosted mc-prod）；不绕过仓库协作约定。生产机IP未知，不猜SSH、不操作其他生产服务。
 - 本条记录时尚未push/合并/部署，后续以GitHub状态为准。
+
+### 收尾状态
+- 本地提交 `bc0d8fe`，分支干净；最终测试根目录 23/23、server 9/9；浏览器 AK 1500→1485、死亡/复活与原PvP smoke通过。
+- push 被 GitHub 明确拒绝：403，`Permission to aiyangdie/mc-aikex-ink.git denied to biily786063474-boop`。
+- API确认当前账号权限 push:false / pull:true；因此没有创建PR、没有合并、没有部署，没有改动生产服务。
+- 需要仓库owner给当前账号Write权限或由有权限的协作者接手；不绕过拒绝。部署前还需重新fetch：权限检查时远端main已推进到3c3f01c，本地测试基线为9cb114d。
