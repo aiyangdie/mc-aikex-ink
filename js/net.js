@@ -1,7 +1,7 @@
 /**
  * 联机客户端：房间码建房/加入，同步方块与玩家位置
  */
-import { apiUrl, wsUrl } from './config.js?v=playerstats6';
+import { apiUrl, wsUrl } from './config.js?v=playerstyle7';
 
 export class NetClient {
   constructor() {
@@ -244,32 +244,65 @@ export class RemotePlayers {
     let entry = this.map.get(info.id);
     if (!entry) {
       const group = new THREE.Group();
-      const body = new THREE.Mesh(
-        new THREE.BoxGeometry(0.55, 1.2, 0.35),
-        new THREE.MeshLambertMaterial({ color: info.color || 0x64b5f6 })
-      );
-      body.position.y = 0.7;
-      const head = new THREE.Mesh(
-        new THREE.BoxGeometry(0.4, 0.4, 0.4),
-        new THREE.MeshLambertMaterial({ color: 0xffe0b2 })
-      );
-      head.position.y = 1.5;
-      const limb = (x, y, color = 0x263238) => {
-        const part = new THREE.Mesh(
-          new THREE.BoxGeometry(0.16, 0.72, 0.16),
-          new THREE.MeshLambertMaterial({ color })
-        );
-        part.position.set(x, y, 0);
-        group.add(part);
-        return part;
+      const color = info.color || 0x4f8cff;
+      const mat = (hex, rough = 0.8, metalness = 0) =>
+        new THREE.MeshStandardMaterial({ color: hex, roughness: rough, metalness });
+      const skin = mat(0xffd0ad);
+      const hair = mat(0x2a2031, 0.6);
+      const cloth = mat(color);
+      const clothDark = mat(0x1b2b4a);
+      const trim = mat(0xffd166, 0.45, 0.15);
+      const boot = mat(0x242936, 0.65);
+      const white = mat(0xffffff, 0.35);
+
+      const cube = (w, h, d, material, x, y, z = 0) => {
+        const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material);
+        mesh.position.set(x, y, z);
+        group.add(mesh);
+        return mesh;
       };
-      const armL = limb(-0.38, 0.78);
-      const armR = limb(0.38, 0.78);
-      const legL = limb(-0.18, 0.05, 0x37474f);
-      const legR = limb(0.18, 0.05, 0x37474f);
-      group.add(body);
-      group.add(head);
+      // 头部：发型、脸、眼睛和颈部，让玩家从远处也有清晰轮廓。
+      cube(0.34, 0.12, 0.42, hair, 0, 1.82);
+      cube(0.42, 0.43, 0.40, skin, 0, 1.57);
+      cube(0.44, 0.12, 0.43, hair, 0, 1.79);
+      cube(0.08, 0.07, 0.018, white, -0.085, 1.60, -0.211);
+      cube(0.08, 0.07, 0.018, white, 0.085, 1.60, -0.211);
+      cube(0.035, 0.045, 0.02, clothDark, -0.085, 1.60, -0.223);
+      cube(0.035, 0.045, 0.02, clothDark, 0.085, 1.60, -0.223);
+      cube(0.16, 0.12, 0.16, skin, 0, 1.31);
+
+      // 身体：衣服、腰带、胸口徽记和披风。
+      const body = cube(0.62, 0.78, 0.40, cloth, 0, 0.94);
+      cube(0.66, 0.08, 0.43, trim, 0, 0.69);
+      cube(0.12, 0.16, 0.025, trim, 0, 1.05, -0.215);
+      const cape = cube(0.50, 0.70, 0.06, clothDark, 0, 1.00, 0.23);
+      cape.rotation.x = -0.08;
+      cube(0.72, 0.10, 0.46, trim, 0, 1.31);
+
+      // 使用关节 Group 旋转，动作会自然地从肩膀/髋部开始。
+      const limb = (x, y, material, leg = false) => {
+        const joint = new THREE.Group();
+        joint.position.set(x, y, 0);
+        const part = new THREE.Mesh(
+          new THREE.BoxGeometry(leg ? 0.19 : 0.17, leg ? 0.72 : 0.62, leg ? 0.20 : 0.18),
+          material
+        );
+        part.position.y = leg ? -0.36 : -0.31;
+        joint.add(part);
+        group.add(joint);
+        return joint;
+      };
+      const armL = limb(-0.40, 1.25, cloth, false);
+      const armR = limb(0.40, 1.25, cloth, false);
+      const legL = limb(-0.18, 0.69, clothDark, true);
+      const legR = limb(0.18, 0.69, clothDark, true);
+      cube(0.22, 0.12, 0.32, boot, -0.18, 0.04, -0.05);
+      cube(0.22, 0.12, 0.32, boot, 0.18, 0.04, -0.05);
+      cube(0.12, 0.12, 0.08, trim, -0.40, 0.98);
+      cube(0.12, 0.12, 0.08, trim, 0.40, 0.98);
       this.scene.add(group);
+
+      const avatarMaterials = [skin, hair, cloth, clothDark, trim, boot, white];
 
       const label = document.createElement('div');
       label.className = 'remote-label';
@@ -279,15 +312,22 @@ export class RemotePlayers {
       this._ensureLabelRoot().appendChild(label);
 
       entry = {
-        mesh: group, label, body, health, armL, armR, legL, legR, name: info.name || '玩家', hp: 20, dimension: 'overworld',
+        mesh: group, label, body, health, armL, armR, legL, legR, avatarMaterials,
+        name: info.name || '玩家', hp: 20, dimension: 'overworld',
         target: { x: 0, y: 0, z: 0, yaw: 0 },
         _phase: Math.random() * Math.PI * 2,
+        _idle: Math.random() * Math.PI * 2,
+        _hurt: 0,
         _inited: false,
       };
       this.map.set(info.id, entry);
     }
     if (info.name) { entry.name = info.name; entry.label.firstChild.textContent = info.name; }
-    if (info.hp != null) { entry.hp = info.hp; entry.health.value = info.hp; }
+    if (info.hp != null) {
+      if (info.hp < entry.hp) entry._hurt = 0.24;
+      entry.hp = info.hp;
+      entry.health.value = info.hp;
+    }
     if (info.dimension) entry.dimension = info.dimension;
     if (info.respawn || info.teleport) entry._inited = false;
     if (info.color != null && entry.body?.material?.color) {
@@ -341,6 +381,15 @@ export class RemotePlayers {
       entry.armR.rotation.x = -swing;
       entry.legL.rotation.x = -swing;
       entry.legR.rotation.x = swing;
+      entry._idle += dt * (moving ? 3 : 1.8);
+      const breathing = Math.sin(entry._idle) * (moving ? 0.008 : 0.018);
+      m.position.y += breathing;
+      entry._hurt = Math.max(0, entry._hurt - dt);
+      const flash = entry._hurt > 0;
+      for (const material of entry.avatarMaterials) {
+        material.emissive?.setHex(flash ? 0x8b1e2d : 0x000000);
+        if (material.emissiveIntensity != null) material.emissiveIntensity = flash ? 0.8 : 0;
+      }
 
       const v = this._tmp.set(m.position.x, m.position.y + 2.0, m.position.z);
       v.project(camera);
