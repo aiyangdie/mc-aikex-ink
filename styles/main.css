@@ -1348,7 +1348,7 @@ html, body {
 body.combat-hurt::after { content: ''; position: fixed; inset: 0; box-shadow: inset 0 0 100px #e33030; pointer-events: none; z-index: 100; }
 @media(max-width: 700px) { #combatHud { bottom: 170px; font-size: 12px; } }
 
-body.mage-blink::after { content: ""; position: fixed; inset: 0; box-shadow: inset 0 0 120px #9d64ff; pointer-events: none; z-index: 100; }
+body.mage-blink::after { content: ""; position: fixed; inset: 0; box-shadow: inset 0 0 100px rgba(77,208,225,.55); pointer-events: none; z-index: 100; }
 #combatHud { flex-wrap: wrap; justify-content: center; width: max-content; }
 /* 持枪准星 */
 body.combat-armed #crosshair {
