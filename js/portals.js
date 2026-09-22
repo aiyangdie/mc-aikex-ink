@@ -2,7 +2,7 @@
  * 传送门：黑曜石框 + 紫色内芯（可穿过）
  * 框规格（简化 MC）：内空宽 2、高 3；外圈黑曜石
  */
-import { BlockType } from './voxel.js?v=playerstats6';
+import { BlockType } from './voxel.js?v=playerstyle7';
 
 /** 在准星附近尝试点燃传送门，成功返回 {axis,x,y,z} */
 export function tryLightPortal(world, tx, ty, tz) {
