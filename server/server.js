@@ -19,6 +19,7 @@ const { URL } = require('url');
 
 async function main() {
 const { RoomBoss, CollisionWorld } = await import('./room-boss.mjs');
+const { isSolid } = await import('../js/voxel.js');
 const { getFoodHeal } = await import('../js/items.js');
 const { buildMobDrops } = await import('../js/loot.js');
 const PORT = Number(process.env.PORT || 3040);
@@ -86,6 +87,9 @@ class Mob {
     this.speed = kind === 'heavy' ? 0.8 : 1.2;
     this.dir = Math.random() * Math.PI * 2;
     this.alive = true;
+    this.stuckTime = 0;
+    this.width = { pig:.8,cow:.95,chicken:.45,duck:.5,deer:.7,horse:.9,donkey:.85,scout:.7,heavy:.9,dragon:1.2 }[kind] || .8;
+    this.height = { pig:.85,cow:1.15,chicken:.55,duck:.55,deer:1.2,horse:1.4,donkey:1.25,scout:1,heavy:1.2,dragon:2 }[kind] || 1;
   }
 
   toJSON() {
@@ -96,16 +100,58 @@ class Mob {
     };
   }
 
-  tick(dt) {
+  _groundY(world, x, z) {
+    for (let y = 46; y >= 0; y--) {
+      if (isSolid(world.getBlock(Math.floor(x), y, Math.floor(z)))
+          && !isSolid(world.getBlock(Math.floor(x), y + 1, Math.floor(z)))
+          && !isSolid(world.getBlock(Math.floor(x), y + 2, Math.floor(z)))) return y + 1;
+    }
+    return null;
+  }
+
+  _canOccupy(world, x, y, z) {
+    const half = this.width * 0.5;
+    const minX = Math.floor(x - half + 0.08), maxX = Math.floor(x + half - 0.08);
+    const minZ = Math.floor(z - half + 0.08), maxZ = Math.floor(z + half - 0.08);
+    const minY = Math.floor(y + 0.05), maxY = Math.floor(y + this.height - 0.05);
+    for (let bx = minX; bx <= maxX; bx++) for (let bz = minZ; bz <= maxZ; bz++) {
+      for (let by = minY; by <= maxY; by++) if (isSolid(world.getBlock(bx, by, bz))) return false;
+    }
+    return true;
+  }
+
+  tick(dt, world) {
     if (!this.alive) return;
     if (Math.random() < dt * 0.4) this.dir += (Math.random() - 0.5) * 1.2;
-    this.x += Math.cos(this.dir) * this.speed * dt;
-    this.z += Math.sin(this.dir) * this.speed * dt;
     // 圈在出生点附近
     const cx = 5.4, cz = 22.6;
     const dx = this.x - cx, dz = this.z - cz;
     if (dx * dx + dz * dz > 28 * 28) {
       this.dir = Math.atan2(cz - this.z, cx - this.x);
+    }
+    const offsets = [0, .55, -.55, 1.1, -1.1, Math.PI];
+    let moved = false;
+    const step = this.speed * Math.min(dt, .2);
+    for (const offset of offsets) {
+      const angle = this.dir + offset;
+      const x = this.x + Math.cos(angle) * step;
+      const z = this.z + Math.sin(angle) * step;
+      const y = this._groundY(world, x, z);
+      if (y === null || Math.abs(y - this.y) > 1.05 || !this._canOccupy(world, x, y, z)) continue;
+      this.x = x; this.y = y; this.z = z; this.dir = angle; moved = true; this.stuckTime = 0; break;
+    }
+    if (!moved) {
+      this.stuckTime += dt;
+      this.dir += 0.8 + Math.random() * 1.4;
+      if (this.stuckTime > 2) {
+        for (let i = 0; i < 12; i++) {
+          const a = Math.random() * Math.PI * 2, r = 0.8 + Math.random() * 2;
+          const x = this.x + Math.cos(a) * r, z = this.z + Math.sin(a) * r, y = this._groundY(world, x, z);
+          if (y !== null && Math.abs(y - this.y) <= 1.05 && this._canOccupy(world, x, y, z)) {
+            this.x = x; this.y = y; this.z = z; this.dir = a; this.stuckTime = 0; break;
+          }
+        }
+      }
     }
     this.yaw = this.dir;
   }
@@ -161,7 +207,7 @@ class Room {
   }
 
   tickMobs(dt) {
-    for (const m of this.mobs.values()) m.tick(dt);
+    for (const m of this.mobs.values()) m.tick(dt, this.collision);
   }
 
   touch() {
