@@ -928,4 +928,4 @@ function selfCheck() {
 selfCheck();
 
 }
-main().catch(error => { console.error('[mc-ws] startup failed', error); process.exitCode = 1; });
+main().catch(error => { console.error('[mc-ws] startup failed', error); process.exit(1); });

@@ -14,6 +14,14 @@ echo "[deploy] $(date -Is) pull…"
 git -c safe.directory="$ROOT" fetch origin main
 git -c safe.directory="$ROOT" reset --hard origin/main
 
+cd "$ROOT"
+# Boss/collision 服务端会 import ../js/voxel.js → 需要根目录 three
+if [[ -f package.json ]]; then
+  npm install --omit=dev
+  # voxel.js (shared with Boss collision) resolves three from repo root
+  [[ -d node_modules/three ]] || npm install three@0.160.0 --no-save
+fi
+
 cd "$ROOT/server"
 if [[ ! -f ecosystem.config.cjs ]]; then
   cp ecosystem.config.cjs.example ecosystem.config.cjs
