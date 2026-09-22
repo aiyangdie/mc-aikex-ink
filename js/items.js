@@ -10,6 +10,7 @@ export const ItemType = {
   DONKEY_MEAT: 105,// 驴肉
   DUCK: 106,       // 鸭肉
   DRAGON_MEAT: 107,// 龙肉
+  BOMB: 108,       // 炸弹 · 炸房子
 };
 
 export const ItemNames = {
@@ -21,6 +22,7 @@ export const ItemNames = {
   [ItemType.DONKEY_MEAT]: '驴肉',
   [ItemType.DUCK]: '鸭肉',
   [ItemType.DRAGON_MEAT]: '龙肉',
+  [ItemType.BOMB]: '炸弹',
 };
 
 export const ItemColors = {
@@ -32,6 +34,7 @@ export const ItemColors = {
   [ItemType.DONKEY_MEAT]: '#9a7b4f',
   [ItemType.DUCK]: '#d4a574',
   [ItemType.DRAGON_MEAT]: '#9c27b0',
+  [ItemType.BOMB]: '#c62828',
 };
 
 /** 食用回血量 */

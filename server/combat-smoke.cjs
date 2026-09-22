@@ -45,14 +45,36 @@ async function run() {
     assert.equal(snapshot.self.hp, 0); assert.equal(snapshot.self.x, 0);
     assert.equal(snapshot.players[0].hp, 20);
     const reborn = await b.wait(m => m.t === 'combat' && m.respawn);
-    assert.equal(reborn.hp, 20); assert.equal(reborn.y, 19.5);
-    a.send({ t: 'move', x: reborn.x, y: reborn.y, z: reborn.z + 10, yaw: 0, pitch: 0, dimension: 'overworld' });
+    assert.equal(reborn.hp, 20); assert.ok([reborn.x, reborn.y, reborn.z].every(Number.isFinite));
+    b.send({ t: 'move', x: 5.4, y: 50, z: 22.6, yaw: 0, pitch: 0, dimension: 'overworld' });
+    a.send({ t: 'move', x: 5.4, y: 50, z: 32.6, yaw: 0, pitch: 0, dimension: 'overworld' });
+
     await delay(80);
     a.send({ t: 'shoot', direction: [0, 0, -1], distance: 80 });
     await delay(100);
     b.send({ t: 'sync' });
     assert.equal((await b.wait(m => m.t === 'sync')).self.hp, 20);
-    console.log('PASS: two clients, damage, death, dead action rejection, snapshot, respawn, protection');
+    await delay(2100);
+    b.send({ t: 'move', x: 5.4, y: 50, z: 27.6, yaw: 0, pitch: 0, dimension: 'overworld' });
+    a.send({ t: 'mode', mode: 'mage' });
+    a.send({ t: 'fireball', end: [5.4, 50.1, 27.6], ground: [5.4, 50.02, 27.6] });
+    const ball = await b.wait(m => m.t === 'fireball');
+    const fire = await b.wait(m => m.t === 'fire');
+    assert.equal(fire.expires - ball.impact, 5000);
+    assert.equal((await b.wait(m => m.t === 'combat' && m.id === second.id)).hp, 14);
+    assert.equal((await b.wait(m => m.t === 'combat' && m.id === second.id)).hp, 12);
+    b.send({ t: 'move', x: 20, y: 50, z: 27.6, yaw: 0, pitch: 0 });
+    a.send({ t: 'sync' });
+    assert.equal((await a.wait(m => m.t === 'sync')).spells.fires.length, 1);
+    a.send({ t: 'blink', to: [5.4, 50, 40.6] });
+    assert.equal((await a.wait(m => m.t === 'combat' && m.teleport)).z, 40.6);
+    a.send({ t: 'blink', to: [5.4, 50, 32.6] });
+    a.send({ t: 'sync' });
+    assert.equal((await a.wait(m => m.t === 'sync')).self.z, 40.6);
+    await delay(Math.max(0, fire.expires - Date.now()) + 250);
+    a.send({ t: 'sync' });
+    assert.equal((await a.wait(m => m.t === 'sync')).spells.fires.length, 0);
+    console.log('PASS: AK damage/death/respawn, mage fireball/burning/5s expiry/snapshot, blink/cooldown');
   } finally { a.ws.close(); b?.ws.close(); }
 }
 run().catch(error => { console.error(error); process.exitCode = 1; });

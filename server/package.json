@@ -4,7 +4,7 @@
   "description": "",
   "main": "server.js",
   "scripts": {
-    "test": "node --test combat.test.cjs ../tests/room-boss.test.mjs ../tests/online-boss.test.mjs",
+    "test": "node --test combat.test.cjs mage.test.cjs ../tests/room-boss.test.mjs ../tests/online-boss.test.mjs",
     "start": "node server.js",
     "dev": "node dev.cjs",
     "test:online": "node combat-smoke.cjs"

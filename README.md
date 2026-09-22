@@ -54,9 +54,11 @@ node server.js
 MIT — 见 [LICENSE](LICENSE)
 
 
-## AK 联机对战
+## AK / 法师联机对战
 
-- 按 **Q**（手机点 **AK**）装备/收起 AK；按住左键或屏幕「开火」连射。收枪后恢复挖掘、建造。
+- 按 **Q**（手机点「切换职业」）装备 AK，再按 Q 切换法师，之后 Q 在 AK/法师间切换。**B** 或「建造」恢复挖掘、建造。AK 按住左键或「开火」连射。
+- 法师左键/「火球术」发射火球，约 0.95 秒一次；落点半径 2.5 格，爆发伤害 6，之后每 0.5 秒伤害 2，地面火焰持续 **5 秒**。只伤害同维度其他玩家，不伤施法者；射向空中未碰到地形则消散。
+- 法师 **Shift** 或「闪现」沿视线移动最多 8 格，冷却 5 秒；客户端逐步检测玩家碰撞箱，遇墙停下。火球/闪现的伤害与冷却由服务器控制。
 - 生命值 20；每发伤害 5；射程 80 格；无限弹药。自己与远端玩家均显示血条。
 - 同房间、同维度玩家可以互射，射线只伤害最近玩家；正常客户端的方块遮挡会截断射线。
 - 阵亡后禁止移动/开火/建造，3 秒后在主世界出生区域上方满血重生，落下时有短暂无摔伤保护；服务器提供 2 秒枪击保护。
@@ -66,7 +68,7 @@ MIT — 见 [LICENSE](LICENSE)
 
 在 server 目录运行 npm ci，然后 npm run dev，浏览器打开 http://127.0.0.1:3040 。开发模式同时提供静态页与 WebSocket；生产 npm start 的静态资源配置保持不变。
 
-运行 npm test 检查伤害、射速、最近命中、死亡、重生、保护、遮挡距离、跨维度隔离及无效输入。启动本地服务后，npm run test:online 用两个真实 WebSocket 客户端测试完整击杀/重生流程。
+运行 npm test 检查伤害、射速、最近命中、死亡、重生、保护、遮挡距离、跨维度隔离及无效输入。启动本地服务后，npm run test:online 用两个真实 WebSocket 客户端测试完整击杀/重生、火球/持续燃烧/5 秒消失、快照与闪现冷却流程。
 
 手动验证：两个浏览器加入同一房间，分别按 Q，瞄准对方连射；检查双方血条、3 秒倒计时、满血重生；再测试隔墙射击、切换维度、暂停时松开鼠标、手机开火按钮。
 
@@ -90,3 +92,5 @@ MIT — 见 [LICENSE](LICENSE)
 验证：根目录 `npm ci --ignore-scripts`、`npm test`；`npm ci --prefix server`、`npm test --prefix server`。
 联调：启动 `node server/server.js` 后运行根目录 `npm run dev`，打开 `http://127.0.0.1:8086`。
 浏览器回归：上述两个本地服务启动后运行 `node scripts/verify-boss-browser.mjs`（需要 Playwright Chromium）；截图存 `docs/verification/`。
+
+法师协议：mode 切换 build/ak/mage；fireball 上报 end 与 ground，服务器广播带 impact 的飞行事件，落地广播带 expires 的 fire；blink 上报 to，接受后广播 combat(teleport=true)。joined/sync 的 spells 包含尚未到期的火球/火区。与原有地形验证边界一致，火球落点与闪现路径碰撞来自客户端；服务端限制距离、职业、生命状态与冷却，尚不独立验证体素遮挡。

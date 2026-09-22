@@ -4,21 +4,24 @@
  */
 
 import * as THREE from 'three';
-import { Combat } from './combat.js?v=mistboss2';
+import { Combat } from './combat.js?v=mistboss3';
+
 import {
   World, Chunk, BlockType, BlockNames, isSolid, Dim,
   CHUNK_SIZE, CHUNK_HEIGHT, RENDER_DISTANCE, getBlockColor, getBreakDrop,
   isMobileDevice, getRenderDistance,
-} from './voxel.js?v=mistboss2';
-import { AnimalManager } from './animals.js?v=mistboss2';
-import { SaveManager } from './save.js?v=mistboss2';
-import { NetClient, RemotePlayers } from './net.js?v=mistboss2';
-import { Inventory } from './inventory.js?v=mistboss2';
-import { isFood, isItem, getItemName, getItemColor, getFoodHeal } from './items.js?v=mistboss2';
-import { tryLightPortal, standingInPortal, spawnReturnPortal } from './portals.js?v=mistboss2';
-import { EnderDragon } from './dragon.js?v=mistboss2';
-import { AdminPanel } from './admin-panel.js?v=mistboss2';
-import { buildStructure } from './structures.js?v=mistboss2';
+} from './voxel.js?v=mistboss3';
+import { AnimalManager } from './animals.js?v=mistboss3';
+import { SaveManager } from './save.js?v=mistboss3';
+import { NetClient, RemotePlayers } from './net.js?v=mistboss3';
+import { Inventory } from './inventory.js?v=mistboss3';
+import { isFood, isItem, getItemName, getItemColor, getFoodHeal, ItemType } from './items.js?v=mistboss3';
+import { BombManager, isBomb } from './bombs.js?v=mistboss3';
+import { tryLightPortal, standingInPortal, spawnReturnPortal } from './portals.js?v=mistboss3';
+import { EnderDragon } from './dragon.js?v=mistboss3';
+import { AdminPanel } from './admin-panel.js?v=mistboss3';
+import { buildStructure } from './structures.js?v=mistboss3';
+
 import { apiUrl } from './config.js';
 import { MistBoss } from './mist-boss.js';
 import { findStandY } from './boss-navigation.js';
@@ -1034,6 +1037,7 @@ export class Game {
 
     // 初始化机器人生成管理器
     this.animalManager = new AnimalManager(this.scene, this.world, this.isMobile);
+    this.bombs = new BombManager(this);
 
     // 相机：更接近真人视野；持枪/冲刺会动态微调
     this.defaultFov = this.isMobile ? 80 : 70;
@@ -1411,7 +1415,7 @@ export class Game {
     }
   }
 
-  /** 右键：食物则吃；否则放置 */
+  /** 右键：食物则吃；炸弹投放；否则放置 */
   _secondaryAction() {
     if (this.player.hp <= 0 || this.combat?.armed) return;
     if (!this.isRunning) return;
@@ -1424,8 +1428,17 @@ export class Game {
       this._eatSelected();
       return;
     }
+    if (isBomb(type) || type === ItemType.BOMB) {
+      if (!this.inventory.consume(this.selectedSlot, 1)) return;
+      // 准星有方块 → 贴墙放置；否则扔出去
+      if (this.player.targetBlock) this.bombs.placeAtTarget();
+      else this.bombs.throwFromPlayer();
+      this._updateHotbar();
+      this._dirtySinceSave = true;
+      return;
+    }
     if (isItem(type)) {
-      this._showSaveToast('按 F 食用，或换方块放置');
+      this._showSaveToast('按 F 食用，或换方块/炸弹');
       return;
     }
     this.player.selectedBlock = type;
@@ -2106,6 +2119,10 @@ export class Game {
       }
       this._respawnPlayer(msg);
     });
+
+    this.net.on('fireball', msg => this.combat?.mage.receive(msg));
+    this.net.on('fire', msg => this.combat?.mage.receive(msg));
+
     this.net.on('block', (msg) => {
       if (msg.by === this.net.id) return;
       this._netApplying = true;
@@ -2136,6 +2153,7 @@ export class Game {
         this._netBossState = null;
         this._online = false;
         this._hostWaiting = false;
+        this.combat?.mage.clear();
         this._showSaveToast('联机已断开');
         this._setOnlineStatus('联机连接断开，请重新建房/加入', true);
         this._hideWaitingPanel();
@@ -2270,6 +2288,11 @@ export class Game {
 
   /** 用房间差分覆盖本地世界 */
   _applyRoomState(msg) {
+    if (this.combat) {
+      this.combat.mage.clear();
+      for (const spell of [...(msg.spells?.projectiles || []), ...(msg.spells?.fires || [])]) this.combat.mage.receive(spell);
+      this.net._send({t:'mode',mode:this.combat.mode});
+    }
     if (msg.self) this.combat?.receive(msg.self);
     this.world.edits = SaveManager.arrayToEdits(msg.edits || []);
     for (const [, chunk] of this.world.chunks) {
@@ -2880,9 +2903,10 @@ export class Game {
     this.combat?.tick(dt);
     if (this.player) this.player._armedLook = !!this.combat?.armed;
     this._tickFov(dt);
+    if (this.bombs) this.bombs.tick(dt);
     if (this.remotes) this.remotes.update(dt, this.camera, this.dimension);
 
-    if (this.animalManager) this.animalManager.update(dt);
+    if (this.animalManager) this.animalManager.update(dt, this.camera);
     if (this._dragon) this._dragon.update(dt);
 
     // 渲染

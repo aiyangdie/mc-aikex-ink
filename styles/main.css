@@ -1348,6 +1348,8 @@ html, body {
 body.combat-hurt::after { content: ''; position: fixed; inset: 0; box-shadow: inset 0 0 100px #e33030; pointer-events: none; z-index: 100; }
 @media(max-width: 700px) { #combatHud { bottom: 170px; font-size: 12px; } }
 
+body.mage-blink::after { content: ""; position: fixed; inset: 0; box-shadow: inset 0 0 120px #9d64ff; pointer-events: none; z-index: 100; }
+#combatHud { flex-wrap: wrap; justify-content: center; width: max-content; }
 /* 持枪准星 */
 body.combat-armed #crosshair {
   color: #ffecb3;
@@ -1409,3 +1411,31 @@ body.combat-hurt::after {
 #btnRespawn { min-width: 220px; min-height: 48px; }
 #btnRespawn:focus-visible { outline: 3px solid #fff; outline-offset: 5px; }
 @media(max-width:600px) { #bossHud { top: 60px; width: 80vw; } }
+
+
+/* 动物血条 */
+#mobLabels {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 35;
+}
+.mob-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: translate(-50%, -100%);
+  text-align: center;
+  color: #fff;
+  font: 12px/1.2 sans-serif;
+  text-shadow: 0 1px 3px #000;
+  white-space: nowrap;
+}
+.mob-label .mob-name { display: block; margin-bottom: 2px; }
+.mob-label progress {
+  display: block;
+  width: 56px;
+  height: 7px;
+  margin: 0 auto;
+  accent-color: #ef5350;
+}

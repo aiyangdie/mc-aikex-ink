@@ -3,8 +3,9 @@
  * 地狱：敌对侦察机
  */
 import * as THREE from 'three';
-import { BlockType, isSolid, Dim } from './voxel.js?v=mistboss2';
-import { ItemType } from './items.js?v=mistboss2';
+import { BlockType, isSolid, Dim } from './voxel.js?v=mistboss3';
+import { ItemType } from './items.js?v=mistboss3';
+
 
 const SPAWN_RADIUS = 28;
 const MIN_SPAWN_DIST = 4;
@@ -67,6 +68,35 @@ class Critter {
         this._baseMats.push({ mat: o.material, hex: o.material.color.getHex() });
       }
     });
+    this._ensureHpLabel();
+  }
+
+  _ensureHpLabel() {
+    if (this.label) return;
+    let root = document.getElementById('mobLabels');
+    if (!root) {
+      root = document.createElement('div');
+      root.id = 'mobLabels';
+      document.body.appendChild(root);
+    }
+    const el = document.createElement('div');
+    el.className = 'mob-label';
+    el.innerHTML = `<span class="mob-name">${this.def.name}</span><progress max="${this.maxHp}" value="${this.hp}"></progress>`;
+    root.appendChild(el);
+    this.label = el;
+    this.hpBar = el.querySelector('progress');
+    this.nameEl = el.querySelector('.mob-name');
+  }
+
+  _syncHpLabel() {
+    if (!this.label) return;
+    if (this.hpBar) {
+      this.hpBar.max = this.maxHp;
+      this.hpBar.value = Math.max(0, this.hp);
+    }
+    if (this.nameEl) {
+      this.nameEl.textContent = `${this.def.name} ${Math.max(0, Math.ceil(this.hp))}/${this.maxHp}`;
+    }
   }
 
   _buildModel(def) {
@@ -138,6 +168,7 @@ class Critter {
     this.hurtTimer = 0.35;
     this.state = 'flee';
     this.stateTimer = 1.8;
+    this._syncHpLabel();
     if (knockDir) {
       const d = knockDir.clone ? knockDir.clone() : new THREE.Vector3(knockDir.x, knockDir.y, knockDir.z);
       d.y = 0;
@@ -153,6 +184,8 @@ class Critter {
     if (this.hp <= 0) {
       this.hp = 0;
       this.dead = true;
+      this._syncHpLabel();
+      if (this.label) this.label.style.display = 'none';
       const drops = [];
       for (let i = 0; i < (this.def.dropN || 1); i++) drops.push(this.def.drop);
       return { dead: true, drops };
@@ -163,9 +196,29 @@ class Critter {
   applyNetPose(x, y, z, yaw, hp) {
     this.position.set(x, y, z);
     if (yaw != null) { this.rotation = yaw; this.targetRotation = yaw; }
-    if (hp != null) this.hp = hp;
+    if (hp != null) { this.hp = hp; this._syncHpLabel(); }
     this.group.position.set(x, y, z);
     this.group.rotation.y = this.rotation;
+  }
+
+  updateLabel(camera) {
+    this._ensureHpLabel();
+    this._syncHpLabel();
+    if (!this.label || !camera || this.dead) {
+      if (this.label) this.label.style.display = 'none';
+      return;
+    }
+    const v = this.position.clone();
+    v.y += this.collisionHeight + 0.35;
+    v.project(camera);
+    if (v.z > 1) {
+      this.label.style.display = 'none';
+      return;
+    }
+    const x = (v.x * 0.5 + 0.5) * window.innerWidth;
+    const y = (-v.y * 0.5 + 0.5) * window.innerHeight;
+    this.label.style.display = 'block';
+    this.label.style.transform = `translate(${x}px,${y}px) translate(-50%,-100%)`;
   }
 
   update(dt, spawnCenter) {
@@ -247,6 +300,8 @@ class Critter {
   }
 
   dispose() {
+    if (this.label?.parentNode) this.label.parentNode.removeChild(this.label);
+    this.label = null;
     if (!this.group) return;
     this.group.traverse((c) => {
       if (c.geometry) c.geometry.dispose();
@@ -386,8 +441,11 @@ export class AnimalManager {
     return best ? { robot: best, dist: bestT } : null;
   }
 
-  update(dt) {
-    for (const r of this.robots) r.update(dt, this.spawnCenter);
+  update(dt, camera = null) {
+    for (const r of this.robots) {
+      r.update(dt, this.spawnCenter);
+      r.updateLabel?.(camera);
+    }
   }
 
   dispose() { this.clearAll(); }

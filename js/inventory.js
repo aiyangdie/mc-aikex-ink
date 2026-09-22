@@ -18,6 +18,7 @@ export class Inventory {
     this.add(15, 16);  // PLANKS
     this.add(3, 16);   // STONE
     this.add(11, 14);  // OBSIDIAN · 地狱门框
+    this.add(108, 8);  // BOMB · 炸弹
   }
 
   clear() {

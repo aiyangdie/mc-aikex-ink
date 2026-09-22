@@ -5,7 +5,8 @@
  * - 随机安全复活点
  */
 import * as THREE from 'three';
-import { isSolid, Dim } from './voxel.js?v=mistboss2';
+import { isSolid, Dim } from './voxel.js?v=mistboss3';
+
 
 const BULLET_SPEED = 95;
 const BULLET_GRAVITY = -18;

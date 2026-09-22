@@ -96,7 +96,7 @@ export class NetClient {
       this._emit('sync', msg);
       return;
     }
-    if (['boss','vitals','respawned','combat','shot'].includes(msg.t)) this._emit(msg.t, msg);
+    if (['boss','vitals','respawned','combat','shot','fireball','fire'].includes(msg.t)) this._emit(msg.t, msg);
     else if (msg.t === 'block') this._emit('block', msg);
     else if (msg.t === 'move') this._emit('move', msg);
     else if (msg.t === 'peer') this._emit('peer', msg);
@@ -275,7 +275,7 @@ export class RemotePlayers {
     if (info.name) { entry.name = info.name; entry.label.firstChild.textContent = info.name; }
     if (info.hp != null) { entry.hp = info.hp; entry.health.value = info.hp; }
     if (info.dimension) entry.dimension = info.dimension;
-    if (info.respawn) entry._inited = false;
+    if (info.respawn || info.teleport) entry._inited = false;
     if (info.color != null && entry.body?.material?.color) {
       entry.body.material.color.setHex(info.color);
     }

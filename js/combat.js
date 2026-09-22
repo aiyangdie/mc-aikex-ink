@@ -1,6 +1,8 @@
 import * as THREE from 'three';
-import { isSolid } from './voxel.js?v=mistboss2';
-import { CombatPhysics, pickRandomSpawn } from './physics.js?v=mistboss2';
+import { Mage } from './mage.js?v=mistboss3';
+import { isSolid } from './voxel.js?v=mistboss3';
+import { CombatPhysics, pickRandomSpawn } from './physics.js?v=mistboss3';
+
 
 /**
  * AK：联机打玩家；单机/联机本地弹道可打动物（PvE）
@@ -10,6 +12,8 @@ export class Combat {
   constructor(game) {
     this.game = game;
     this.armed = false;
+    this.mode = 'build';
+    this.mage = new Mage(game);
     this.held = false;
     this.nextShot = 0;
     this.deadUntil = 0;
@@ -22,8 +26,10 @@ export class Combat {
     this.panel = document.createElement('div');
     this.panel.id = 'combatHud';
     this.panel.innerHTML =
-      '<button type="button" id="equipAK">AK [Q]</button>' +
+      '<button type="button" id="equipAK">切换职业 [Q]</button>' +
       '<button type="button" id="fireAK">开火</button>' +
+      '<button type="button" id="blinkMage">闪现 [Z]</button>' +
+      '<button type="button" id="buildMode">建造 [B]</button>' +
       '<span id="combatStatus"></span>';
     document.body.appendChild(this.panel);
     this.status = this.panel.querySelector('#combatStatus');
@@ -35,6 +41,8 @@ export class Combat {
 
     const equip = this.panel.querySelector('#equipAK');
     equip.onclick = () => this.toggle();
+    this.panel.querySelector('#blinkMage').onclick = () => this.mage.blink();
+    this.panel.querySelector('#buildMode').onclick = () => this.setMode('build');
     const fire = this.panel.querySelector('#fireAK');
     fire.onpointerdown = (e) => {
       e.preventDefault();
@@ -46,9 +54,13 @@ export class Combat {
     };
 
     document.addEventListener('keydown', (e) => {
-      if (e.code === 'KeyQ' && !e.repeat && game._controlsActive() && !/INPUT|TEXTAREA/.test(e.target.tagName)) {
-        this.toggle();
+      if (!game._controlsActive() || /INPUT|TEXTAREA/.test(e.target.tagName)) return;
+      if (e.code === 'KeyB' && !e.repeat) this.setMode('build');
+      if (e.code === 'KeyZ' && !e.repeat) {
+        e.preventDefault();
+        this.mage.blink();
       }
+      if (e.code === 'KeyQ' && !e.repeat) this.toggle();
     });
     document.addEventListener('mousedown', (e) => {
       if (e.button === 0 && game._controlsActive() && (game.isPointerLocked || e.target === game.canvas)) {
@@ -97,14 +109,15 @@ export class Combat {
     if (!g.camera.parent) g.scene.add(g.camera);
   }
 
-  toggle() {
-    this.armed = !this.armed;
-    this.held = false;
-    this._spread = this.armed ? 0.35 : 0;
+  setMode(mode) {
+    if (this.game.player.hp <= 0) return;
+    this.mode = mode; this.armed = mode !== 'build'; this.held = false;
+    this._spread = mode === 'ak' ? .35 : 0;
     document.body.classList.toggle('combat-armed', this.armed);
-    if (this.armed) this.game._punchFov?.(-6);
-    else this.game._punchFov?.(0);
+    this.game._punchFov?.(mode === 'ak' ? -6 : 0);
+    if (this.game._online) this.game.net._send({t:'mode',mode});
   }
+  toggle() { this.setMode(this.mode === 'ak' ? 'mage' : 'ak'); }
 
   receive(msg) {
     const g = this.game;
@@ -130,10 +143,11 @@ export class Combat {
     if (!msg.hp) {
       this.held = false;
       g.player.keys = {};
-      this.armed = false;
       document.body.classList.remove('combat-armed');
     }
+    if (msg.teleport) this.mage.teleport([msg.x, msg.y, msg.z]);
     if (msg.respawn) {
+      document.body.classList.toggle('combat-armed', this.armed);
       const reset = () => {
         g.player.position.set(msg.x, msg.y, msg.z);
         g.player.velocity.set(0, 0, 0);
@@ -161,7 +175,8 @@ export class Combat {
     const now = performance.now();
     if (!this.armed || !g.isRunning || g.player.hp <= 0 || now < this.nextShot) return;
     if (this.deadUntil && Date.now() < this.deadUntil) return;
-    this.nextShot = now + 105;
+    if (this.mode === 'mage') { this.mage.cast(); return; }
+    this.nextShot = now + 130;
 
     const p = g.player;
     const spread = 0.008 + this._spread * 0.018;
@@ -272,7 +287,10 @@ export class Combat {
     this.physics.tick(dt);
 
     this.panel.style.display = active ? 'flex' : 'none';
-    this.gun.visible = active && this.armed && g.player.hp > 0;
+    this.mage.tick(active);
+    this.panel.querySelector('#blinkMage').style.display = '';
+    this.panel.querySelector('#fireAK').textContent = this.mode === 'mage' ? '火球术' : '开火';
+    this.gun.visible = active && this.mode === 'ak' && g.player.hp > 0;
 
     this.gun.position.z += (this._gunBase.z - this.gun.position.z) * 0.28;
     this.gun.rotation.x *= 0.75;
@@ -291,13 +309,18 @@ export class Combat {
       cross.style.transform = `translate(-50%, -50%) scale(${s})`;
     }
 
+    const blinkCd = Math.ceil(this.mage.cdLeft() / 1000);
+    const blinkTxt = blinkCd > 0 ? `Z闪现 ${blinkCd}s` : 'Z闪现就绪';
     this.status.textContent =
       g.player.hp <= 0
         ? `已阵亡 · ${Math.max(1, Math.ceil((this.deadUntil - Date.now()) / 1000))} 秒后随机复活`
-        : this.armed
-          ? 'AK · 可打动物/玩家 · 有击退 · Q 收枪'
-          : 'Q 装备 AK · 子弹带物理 · 复活随机点';
+        : this.mode === 'mage'
+          ? `法师 · 火球 · ${blinkTxt} · Q切AK · B建造`
+          : this.armed
+            ? `AK · ${blinkTxt} · Q切法师 · B建造`
+            : `建造 · ${blinkTxt} · Q开战 · 右键炸弹`;
 
+    if (g._fallbackActive) this.status.textContent += ' · WASD 移动 / 右键拖动视角 / Esc 暂停';
     if (!active) this.held = false;
     if (active && this.held) this.shoot();
 

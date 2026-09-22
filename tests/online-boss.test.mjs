@@ -10,7 +10,7 @@ async function client(url){
  ws.addEventListener('message',e=>messages.push(JSON.parse(e.data)));
  await new Promise((r,j)=>{ws.addEventListener('open',r,{once:true});ws.addEventListener('error',j,{once:true});});
  return {ws,messages,send:o=>ws.send(JSON.stringify(o)),async wait(predicate,ms=3000){
-   const end=Date.now()+ms;while(Date.now()<end){const i=messages.findIndex(predicate);if(i>=0)return messages.splice(i,1)[0];await delay(20);}throw new Error('WebSocket event timeout');
+   const end=Date.now()+ms;while(Date.now()<end){const i=messages.findIndex(predicate);if(i>=0)return messages.splice(i,1)[0];await delay(20);}throw new Error('WebSocket event timeout: '+JSON.stringify(messages.slice(-3)));
  }};
 }
 test('two real sockets see one Boss, shared damage, authoritative death and protected respawn', {timeout:20000},async t=>{
@@ -19,7 +19,7 @@ test('two real sockets see one Boss, shared damage, authoritative death and prot
  const dir=await mkdtemp(tmpdir()+'/mc-boss-test-');
  const child=spawn(process.execPath,['server/server.js'],{cwd:new URL('../',import.meta.url),env:{...process.env,PORT:String(port),HOST:'127.0.0.1',MC_DATA_DIR:dir,MC_OWNER_KEY:'test-only-owner'}});
  let logs='';child.stdout.on('data',b=>logs+=b);child.stderr.on('data',b=>logs+=b);
- t.after(async()=>{child.kill('SIGTERM');await new Promise(r=>child.once('exit',r));await rm(dir,{recursive:true,force:true});});
+ t.after(async()=>{if(child.exitCode===null){child.kill('SIGTERM');await new Promise(r=>child.once('exit',r));}await rm(dir,{recursive:true,force:true});});
  for(let i=0;i<100&&!logs.includes('http://');i++)await delay(25);
  assert.match(logs,/http:\/\//,logs);
  const a=await client(`ws://127.0.0.1:${port}/ws`),b=await client(`ws://127.0.0.1:${port}/ws`);
