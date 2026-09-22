@@ -3,9 +3,9 @@
  * 地狱：敌对侦察机
  */
 import * as THREE from 'three';
-import { BlockType, isSolid, Dim } from './voxel.js?v=playerstyle7';
-import { ItemType } from './items.js?v=playerstyle7';
-import { buildMobDrops } from './loot.js?v=playerstyle7';
+import { BlockType, isSolid, Dim } from './voxel.js?v=animalfix8';
+import { ItemType } from './items.js?v=animalfix8';
+import { buildMobDrops } from './loot.js?v=animalfix8';
 
 const SPAWN_RADIUS = 28;
 const MIN_SPAWN_DIST = 4;
@@ -57,6 +57,8 @@ class Critter {
     this.stateTimer = randRange(1, 3);
     this.wanderDir = new THREE.Vector3(1, 0, 0);
     this.bobPhase = Math.random() * 6;
+    this._stuckTime = 0;
+    this._lastMove = this.position.clone();
 
     this.group = new THREE.Group();
     this.group.position.copy(this.position);
@@ -137,8 +139,71 @@ class Critter {
     const below = this.world.getBlock(Math.floor(wx), Math.floor(wy) - 1, Math.floor(wz));
     if (!isSolid(below) || below === BlockType.LEAVES) return false;
     if (this.world.getBlock(Math.floor(wx), Math.floor(wy), Math.floor(wz)) === BlockType.WATER) return false;
-    if (Math.abs(this._getGroundY(wx, wz) - wy) > 2) return false;
+    if (Math.abs(this._getGroundY(wx, wz) - this.position.y) > 1.05) return false;
+    return this._canOccupy(wx, wy, wz);
+  }
+
+  /** 检查生物整个身体的净空，避免只看脚下而穿进墙里。 */
+  _canOccupy(wx, wy, wz) {
+    const half = this.collisionWidth * 0.5;
+    const minX = Math.floor(wx - half + 0.08);
+    const maxX = Math.floor(wx + half - 0.08);
+    const minZ = Math.floor(wz - half + 0.08);
+    const maxZ = Math.floor(wz + half - 0.08);
+    const minY = Math.floor(wy + 0.05);
+    const maxY = Math.floor(wy + this.collisionHeight - 0.05);
+    for (let x = minX; x <= maxX; x++) {
+      for (let z = minZ; z <= maxZ; z++) {
+        for (let y = minY; y <= maxY; y++) {
+          const block = this.world.getBlock(x, y, z);
+          if (isSolid(block)) return false;
+        }
+      }
+    }
     return true;
+  }
+
+  _tryMove(dir, step, spawnCenter) {
+    const angles = [0, 0.48, -0.48, 0.9, -0.9, 1.35, -1.35, Math.PI];
+    const scales = [1, 0.7, 0.4];
+    for (const scale of scales) {
+      for (const offset of angles) {
+        const angle = Math.atan2(dir.z, dir.x) + offset;
+        const distance = step * scale;
+        const nx = this.position.x + Math.cos(angle) * distance;
+        const nz = this.position.z + Math.sin(angle) * distance;
+        const ny = this._getGroundY(nx, nz);
+        const dist = Math.hypot(nx - spawnCenter.x, nz - spawnCenter.z);
+        if (dist >= WANDER_RANGE || !this._isSafeStep(nx, ny, nz)) continue;
+        this.position.set(nx, ny, nz);
+        this.targetRotation = angle;
+        this.wanderDir.set(Math.cos(angle), 0, Math.sin(angle));
+        this._stuckTime = 0;
+        return true;
+      }
+    }
+    this._stuckTime += step > 0 ? Math.min(0.1, step / Math.max(this.wanderSpeed, 0.1)) : 0.05;
+    return false;
+  }
+
+  _tryUnstick() {
+    if (this._stuckTime < 1.2) return false;
+    for (let i = 0; i < 16; i++) {
+      const angle = (Math.PI * 2 * i) / 16;
+      const radius = 0.8 + (i % 3) * 0.55;
+      const x = this.position.x + Math.cos(angle) * radius;
+      const z = this.position.z + Math.sin(angle) * radius;
+      const y = this._getGroundY(x, z);
+      if (this._isSafeStep(x, y, z)) {
+        this.position.set(x, y, z);
+        this.targetRotation = angle;
+        this._stuckTime = 0;
+        return true;
+      }
+    }
+    this.targetRotation += Math.PI * 0.75;
+    this._stuckTime = 0.4;
+    return false;
   }
 
   hitDistance(origin, dir, maxDist) {
@@ -237,13 +302,20 @@ class Critter {
       const ny = this.position.y + this.knockVelocity.y * dt;
       const nz = this.position.z + this.knockVelocity.z * dt;
       const gy = this._getGroundY(nx, nz);
-      if (ny <= gy) {
+      if (ny <= gy && this._canOccupy(nx, gy, nz)) {
         this.position.set(nx, gy, nz);
         this.knockVelocity.y = 0;
         this.knockVelocity.x *= 0.55;
         this.knockVelocity.z *= 0.55;
-      } else {
+      } else if (ny <= gy) {
+        this.knockVelocity.x = 0;
+        this.knockVelocity.z = 0;
+        this.knockVelocity.y = 0;
+      } else if (this._canOccupy(nx, ny, nz)) {
         this.position.set(nx, ny, nz);
+      } else {
+        this.knockVelocity.x = 0;
+        this.knockVelocity.z = 0;
       }
       this.knockVelocity.x *= Math.exp(-dt * 3);
       this.knockVelocity.z *= Math.exp(-dt * 3);
@@ -261,16 +333,10 @@ class Critter {
       const dir = this.state === 'flee'
         ? new THREE.Vector3(Math.cos(this.targetRotation), 0, Math.sin(this.targetRotation))
         : this.wanderDir;
-      const nx = this.position.x + dir.x * step;
-      const nz = this.position.z + dir.z * step;
-      const ny = this._getGroundY(nx, nz);
-      const dist = Math.hypot(nx - spawnCenter.x, nz - spawnCenter.z);
-      if (this._isSafeStep(nx, ny, nz) && dist < WANDER_RANGE) {
-        this.position.set(nx, ny, nz);
-        this.targetRotation = Math.atan2(dir.z, dir.x);
-      } else {
+      if (!this._tryMove(dir, step, spawnCenter)) {
         this.targetRotation += randRange(0.6, 1.4);
         this.wanderDir.set(Math.cos(this.targetRotation), 0, Math.sin(this.targetRotation));
+        this._tryUnstick();
       }
       if (this.stateTimer <= 0) {
         this.state = this.state === 'flee' ? 'wander' : 'idle';
