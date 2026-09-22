@@ -144,6 +144,13 @@ html, body {
   color: #ffe082;
   font-variant-numeric: tabular-nums;
 }
+#hpHud .defeat-hud {
+  margin-left: 6px;
+  padding-left: 10px;
+  border-left: 1px solid rgba(255,255,255,.25);
+  color: #ffcc80;
+  font-variant-numeric: tabular-nums;
+}
 
 #dimHud {
   position: fixed;
