@@ -3,7 +3,7 @@
  * 炸毁可破坏方块、伤害生物与玩家、带击退
  */
 import * as THREE from 'three';
-import { BlockType, isSolid } from './voxel.js?v=playerstats6';
+import { BlockType, isSolid } from './voxel.js?v=playerstyle7';
 
 const FUSE = 2.4;
 const RADIUS = 3.6;
