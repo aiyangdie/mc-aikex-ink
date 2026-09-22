@@ -86,6 +86,8 @@ class Mob {
     this.hp = this.maxHp;
     this.speed = kind === 'heavy' ? 0.8 : 1.2;
     this.dir = Math.random() * Math.PI * 2;
+    this.state = 'wander';
+    this.stateTimer = 0;
     this.alive = true;
     this.stuckTime = 0;
     this.width = { pig:.8,cow:.95,chicken:.45,duck:.5,deer:.7,horse:.9,donkey:.85,scout:.7,heavy:.9,dragon:1.2 }[kind] || .8;
@@ -96,7 +98,7 @@ class Mob {
     return {
       id: this.id, kind: this.kind,
       x: +this.x.toFixed(2), y: +this.y.toFixed(2), z: +this.z.toFixed(2),
-      yaw: +this.yaw.toFixed(3), hp: this.hp, maxHp: this.maxHp,
+      yaw: +this.yaw.toFixed(3), hp: this.hp, maxHp: this.maxHp, state: this.state,
     };
   }
 
@@ -122,6 +124,8 @@ class Mob {
 
   tick(dt, world) {
     if (!this.alive) return;
+    this.stateTimer = Math.max(0, this.stateTimer - dt);
+    if (this.state === 'flee' && this.stateTimer <= 0) this.state = 'wander';
     if (Math.random() < dt * 0.4) this.dir += (Math.random() - 0.5) * 1.2;
     // 圈在出生点附近
     const cx = 5.4, cz = 22.6;
@@ -131,7 +135,7 @@ class Mob {
     }
     const offsets = [0, .55, -.55, 1.1, -1.1, Math.PI];
     let moved = false;
-    const step = this.speed * Math.min(dt, .2);
+    const step = this.speed * (this.state === 'flee' ? 1.8 : 1) * Math.min(dt, .2);
     for (const offset of offsets) {
       const angle = this.dir + offset;
       const x = this.x + Math.cos(angle) * step;
@@ -196,6 +200,13 @@ class Room {
     const m = this.mobs.get(id);
     if (!m || !m.alive) return null;
     m.hp -= Math.max(1, Math.min(10, dmg | 0 || 3));
+    const attacker = this.peers.get(byId);
+    if (attacker && Number.isFinite(attacker.x) && Number.isFinite(attacker.z)) {
+      const dx = m.x - attacker.x, dz = m.z - attacker.z;
+      if (Math.hypot(dx, dz) > 0.001) m.dir = Math.atan2(dz, dx);
+      m.state = 'flee';
+      m.stateTimer = 2.2;
+    }
     this.touch();
     if (m.hp <= 0) {
       m.alive = false;
