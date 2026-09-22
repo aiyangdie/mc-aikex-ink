@@ -1,7 +1,7 @@
 /**
  * 联机客户端：房间码建房/加入，同步方块与玩家位置
  */
-import { apiUrl, wsUrl } from './config.js?v=mistboss5';
+import { apiUrl, wsUrl } from './config.js?v=playerstats6';
 
 export class NetClient {
   constructor() {
@@ -254,6 +254,19 @@ export class RemotePlayers {
         new THREE.MeshLambertMaterial({ color: 0xffe0b2 })
       );
       head.position.y = 1.5;
+      const limb = (x, y, color = 0x263238) => {
+        const part = new THREE.Mesh(
+          new THREE.BoxGeometry(0.16, 0.72, 0.16),
+          new THREE.MeshLambertMaterial({ color })
+        );
+        part.position.set(x, y, 0);
+        group.add(part);
+        return part;
+      };
+      const armL = limb(-0.38, 0.78);
+      const armR = limb(0.38, 0.78);
+      const legL = limb(-0.18, 0.05, 0x37474f);
+      const legR = limb(0.18, 0.05, 0x37474f);
       group.add(body);
       group.add(head);
       this.scene.add(group);
@@ -266,8 +279,9 @@ export class RemotePlayers {
       this._ensureLabelRoot().appendChild(label);
 
       entry = {
-        mesh: group, label, body, health, name: info.name || '玩家', hp: 20, dimension: 'overworld',
+        mesh: group, label, body, health, armL, armR, legL, legR, name: info.name || '玩家', hp: 20, dimension: 'overworld',
         target: { x: 0, y: 0, z: 0, yaw: 0 },
+        _phase: Math.random() * Math.PI * 2,
         _inited: false,
       };
       this.map.set(info.id, entry);
@@ -318,6 +332,15 @@ export class RemotePlayers {
       m.position.y += (t.y - m.position.y) * k;
       m.position.z += (t.z - m.position.z) * k;
       m.rotation.y = t.yaw;
+      const dx = t.x - m.position.x;
+      const dz = t.z - m.position.z;
+      const moving = Math.hypot(dx, dz) > 0.025;
+      if (moving) entry._phase += dt * 10;
+      const swing = moving ? Math.sin(entry._phase) * 0.45 : 0;
+      entry.armL.rotation.x = swing;
+      entry.armR.rotation.x = -swing;
+      entry.legL.rotation.x = -swing;
+      entry.legR.rotation.x = swing;
 
       const v = this._tmp.set(m.position.x, m.position.y + 2.0, m.position.z);
       v.project(camera);
