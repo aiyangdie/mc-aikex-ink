@@ -1,0 +1,105 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>房间聊天、核弹与地形重置 · 实现计划</title><style>*,*::before,*::after{box-sizing:border-box}body{margin:0;background:#0a0a0a;color:#f5f5f5;font:15px/1.75 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif}main{max-width:1080px;margin:auto;padding:42px 24px 100px}h1{font-size:38px;line-height:1.25;margin:12px 0}h2{color:#737373;font-size:12px;letter-spacing:.15em;margin:52px 0 10px}h3{font-size:24px;margin:0 0 12px}h4{font-size:18px;margin:24px 0 12px}p{color:#a3a3a3}strong{color:#f5f5f5}.eyebrow,.meta{font-size:12px;color:#737373;letter-spacing:.1em}.verdict{border-left:2px solid #34d399;background:rgba(16,185,129,.05);padding:18px 22px;margin:20px 0}.warn{border-left:2px solid #fbbf24;background:rgba(245,158,11,.05);padding:18px 22px;margin:20px 0}.card{border:1px solid #262626;background:rgba(23,23,23,.5);border-radius:14px;padding:20px 24px;margin:20px 0}pre,code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#111;color:#d4d4d4}pre{white-space:pre-wrap;overflow-wrap:anywhere;border-radius:12px;padding:16px;font-size:12.5px;line-height:1.6}code{padding:2px 5px;border-radius:5px}li{margin:7px 0;color:#d4d4d4}.tw{overflow-x:auto;border:1px solid #262626;border-radius:14px}table{width:100%;border-collapse:collapse;min-width:620px;font-size:13px}th,td{text-align:left;padding:10px 13px;border-bottom:1px solid #262626;vertical-align:top}th{background:#141414;color:#a3a3a3}td{color:#d4d4d4}a{color:#7dd3fc}@media(max-width:600px){main{padding:24px 18px 70px}h1{font-size:29px}}</style></head><body><main>
+<div class="eyebrow">IMPLEMENTATION PLAN · 2026-09-22 · REVIEW REQUESTED</div><h1>房间聊天、核弹与地形重置 · 实现计划</h1>
+<div class="verdict"><strong>For agentic workers:</strong> 执行前由用户选择单会话或子代理方式；逐任务 TDD 红绿、验证并提交，未验证不得声称完成。</div>
+<p><strong>Goal:</strong> 房间聊天输入 Maydaymayday 后，本房间除施放者外全部玩家/生灵死亡，半径 12 格地形炸毁；房主可重置全部地形。</p><p><strong>Architecture:</strong> 房间事件由 server/server.js 权威结算；纯函数负责口令与弹坑边界；地形 edits 按维度存储并广播批量 diff；客户端快照/增量按修订版本应用。</p><p><strong>Tech Stack:</strong> WebSocket、Node.js、Three.js、node:test、Playwright</p><p><strong>Spec:</strong> <code>docs/superpowers/specs/2026-09-22-room-nuke-reset-design.html</code></p>
+<h2>00 / GLOBAL CONSTRAINTS</h2><h3>跨任务硬约束</h3><ul><li>保留原仓库安全/沙箱规则，AGENTS.md 的用户注入差异不得提交。</li><li>人物模型朝向 -Math.PI/2 保持不变；原有 AK、法师、炸弹与 PvP 自动复活继续工作。</li><li>仅在本地服务/临时房间测试；不得对生产联机房间触发核弹或地形重置。</li><li>没有上游写权限；完成后只推 Fork 并提交上游 PR，合并/部署交维护者。</li><li>前置：先完成 Boss 60 秒再刷新计划，核弹杀 Boss 调用 RoomBoss.kill(now)。</li><li>口令完全匹配 Maydaymayday；半径 12；每房间 5 分钟冷却且重启保留。</li><li>只有房主可以重置地形；二次确认，清地形不清背包/Boss 倒计时。</li></ul>
+<h2>01 / FILE MAP</h2><h3>职责与接口</h3><div class="tw"><table><tr><th>文件</th><th>职责</th></tr><tr><td><code>server/server.js</code></td><td>房间权威、快照、事件、权限与存档。</td></tr><tr><td><code>server/room-chat.mjs</code></td><td>聊天过滤与精确口令识别。</td></tr><tr><td><code>server/room-nuke.mjs</code></td><td>有界弹坑坐标纯函数。</td></tr><tr><td><code>js/room-chat.js</code></td><td>聊天输入、渲染与房主确认。</td></tr><tr><td><code>js/net.js</code></td><td>WebSocket 新消息分发。</td></tr><tr><td><code>js/game.js</code></td><td>地形重建、死亡、特效、房间 UI。</td></tr><tr><td><code>tests/*nuke* / room-edits / room-reset</code></td><td>安全边界与联机回归。</td></tr></table></div>
+<h2>02 / REVIEW FOCUS</h2><h3>最容易遗漏的输入与异常</h3><ol><li>输入含 HTML/超长/高频聊天：按文字显示且服务端限制，不执行脚本。</li><li>同时两人输入口令：同房间只成功一次，其他房间不受影响。</li><li>房主掉线/重连/改名：重置权限不可由名字冒充。</li><li>核爆在地狱或末地：弹坑不能错误写入主世界旧 edits。</li><li>核爆后刚好重置/重连：旧 block 增量不得覆盖新的快照。</li></ol>
+<h2>03 / TASK</h2><h3>Task 1: 按维度存储房间地形差分</h3><div class="card"><p><strong>Files:</strong> server/room-terrain.mjs (new); server/server.js; server/room-boss.mjs; js/net.js; js/game.js; tests/room-edits.test.mjs</p><p><strong>Interfaces:</strong> RoomTerrain.fromPersist(row):RoomTerrain; getEdits(dim):Map; editsArray(dim):number[]; setBlock(x,y,z,b,dim):boolean; applyBatch(edits,dim):boolean (preflight MAX_EDITS); clearAll():number; Room delegates; snapshot.editsByDimension and block.dimension; old edits[] migrates to overworld。</p><p><strong>Independent deliverable:</strong> 三维度方块互不串写，旧房间数据继续加载。</p></div>
+<ol><li><strong>Write failing test</strong><pre>test(&#x27;legacy edits migrate only to overworld&#x27;,()=&gt;{
+ const room=RoomTerrain.fromPersist({edits:[1,19,2,3]});
+ assert.deepEqual(room.editsArray(&#x27;overworld&#x27;),[1,19,2,3]);
+ assert.deepEqual(room.editsArray(&#x27;nether&#x27;),[]);
+ room.setBlock(1,19,2,0,&#x27;nether&#x27;);
+ assert.deepEqual(room.editsArray(&#x27;overworld&#x27;),[1,19,2,3]);
+});
+// Add websocket: block{dimension:&#x27;nether&#x27;} only changes nether snapshot.</pre></li><li><strong>Run red</strong><pre>node --test tests/room-edits.test.mjs  # expect dim map API missing</pre></li><li><strong>Implement minimal behavior</strong><pre>export class RoomTerrain {
+ static fromPersist(row) {const t=new RoomTerrain();t.applyEditsArray(row.edits,&#x27;overworld&#x27;);return t;}
+ getEdits(dim=&#x27;overworld&#x27;) {
+ const key=[&#x27;overworld&#x27;,&#x27;nether&#x27;,&#x27;end&#x27;].includes(dim)?dim:&#x27;overworld&#x27;;
+ if(!this.editsByDimension[key])this.editsByDimension[key]=new Map();
+ return this.editsByDimension[key];
+ }
+}
+// In fromPersist: {overworld: legacyEdits,nether:[],end:[]}.
+// Keep room.edits alias to overworld for CollisionWorld;
+// snapshot includes all dimensions; client swaps active world.edits on dimension switch.</pre></li><li><strong>Run green and regression</strong><pre>node --test tests/room-edits.test.mjs &amp;&amp; npm test --prefix server &amp;&amp; npm test</pre></li><li><strong>Commit only task files</strong><pre>git add server/room-terrain.mjs server/server.js server/room-boss.mjs js/net.js js/game.js tests/room-edits.test.mjs &amp;&amp; git commit -m &quot;feat: isolate room terrain by dimension&quot;</pre></li></ol>
+<h2>04 / TASK</h2><h3>Task 2: 普通房间聊天与安全输入</h3><div class="card"><p><strong>Files:</strong> server/room-chat.mjs (new); server/server.js; js/net.js; js/room-chat.js (new); js/game.js; index.html; styles/main.css; tests/room-chat.test.mjs</p><p><strong>Interfaces:</strong> isNukeCode(text):boolean; sanitizeChat(text):string|null; NetClient.sendChat(text); Game._chatOpen:boolean; server chat broadcast {t:&quot;chat&quot;,by,text}。</p><p><strong>Independent deliverable:</strong> T/回车聊天可用；只有服务器识别精确口令，消息渲染不注入 HTML。</p></div>
+<ol><li><strong>Write failing test</strong><pre>test(&#x27;chat filters oversized text and exact nuke phrase&#x27;,()=&gt;{
+ assert.equal(isNukeCode(&#x27;Maydaymayday&#x27;),true);
+ assert.equal(isNukeCode(&#x27;maydaymayday&#x27;),false);
+ assert.equal(sanitizeChat(&#x27;x&#x27;.repeat(201)),null);
+});
+// DOM test: &lt;img onerror=...&gt; remains textContent, T focus suppresses movement.</pre></li><li><strong>Run red</strong><pre>node --test tests/room-chat.test.mjs  # expect functions missing</pre></li><li><strong>Implement minimal behavior</strong><pre>export const isNukeCode = text =&gt; text === &#x27;Maydaymayday&#x27;;
+export function sanitizeChat(text) {
+ if(typeof text!==&#x27;string&#x27;||!text.trim()||text.length&gt;200)return null;
+ return text.trim();
+}
+// Server per-peer 500ms chat cadence; client renders with node.textContent.
+// T opens only online/in active game; Enter sends, Escape closes.</pre></li><li><strong>Run green and regression</strong><pre>node --test tests/room-chat.test.mjs &amp;&amp; npm test --prefix server &amp;&amp; npm test</pre></li><li><strong>Commit only task files</strong><pre>git add server/room-chat.mjs server/server.js js/net.js js/room-chat.js js/game.js index.html styles/main.css tests/room-chat.test.mjs &amp;&amp; git commit -m &quot;feat: add safe room chat and nuke command channel&quot;</pre></li></ol>
+<h2>05 / TASK</h2><h3>Task 3: 服务端核弹结算与受限弹坑</h3><div class="card"><p><strong>Files:</strong> server/room-nuke.mjs (new); server/server.js; js/net.js; js/game.js; tests/room-nuke.test.mjs; tests/online-nuke.test.mjs</p><p><strong>Interfaces:</strong> craterCells(origin,radius=12,height=48):Array&lt;[x,y,z,0]&gt;; resolveNuke(room,peer,now):result|null in room-nuke.mjs; server Room delegates; result={casterId,dimension,origin,sequence,edits}; lastNukeAt persisted。</p><p><strong>Independent deliverable:</strong> 当前房间原子结算：施放者活着，其他玩家/生灵/Boss死亡，弹坑保存并广播。</p></div>
+<ol><li><strong>Write failing test</strong><pre>test(&#x27;nuke isolates rooms and exempts the caster&#x27;,()=&gt;{
+ const caster={id:&#x27;c&#x27;,hp:20,active:true,dimension:&#x27;overworld&#x27;,x:0,y:19,z:0};
+ const victim={id:&#x27;v&#x27;,hp:20,active:true,dimension:&#x27;nether&#x27;};
+ const other={id:&#x27;o&#x27;,hp:20,active:true};
+ const a={peers:new Map([[1,caster],[2,victim]]),mobs:new Map(),boss:{kill(){this.hp=0},hp:1500},
+  setBlock(){return true},touch(){},lastNukeAt:-Infinity,terrainRevision:0};
+ const b={peers:new Map([[3,other]])};
+ const event=resolveNuke(a,caster,10_000);
+ assert.equal(caster.hp,20);assert.equal(victim.hp,0);assert.equal(other.hp,20);
+ assert.equal(a.boss.hp,0);assert.ok(event.edits.length&gt;0);
+ assert.equal(resolveNuke(a,caster,10_001),null);
+});
+// Include dead caster, wrong room, cross-dimension edits, &gt;MAX_EDITS, restart cooldown.</pre></li><li><strong>Run red</strong><pre>node --test tests/room-nuke.test.mjs tests/online-nuke.test.mjs  # expect missing API</pre></li><li><strong>Implement minimal behavior</strong><pre>export function craterCells(o,r=12,height=48) {
+ const cells=[];
+ for(let x=Math.floor(o.x-r);x&lt;=o.x+r;x++)
+ for(let z=Math.floor(o.z-r);z&lt;=o.z+r;z++)
+ for(let y=Math.max(0,Math.floor(o.y-r/2));y&lt;Math.min(height,Math.ceil(o.y+r/2));y++)
+   if((x-o.x)**2+(z-o.z)**2+((y-o.y)*1.3)**2&lt;=r*r)cells.push([x,y,z,0]);
+ return cells;
+}
+// Precompute crater and preflight new unique edit count against MAX_EDITS;
+// reject entire command before any HP/mob change if capacity is insufficient.
+// Then claim lastNukeAt, kill victims with manualRespawn=true, clear mobs,
+// call boss.kill(now), applyBatch(edits,peer.dimension), increment revision once.
+// Broadcast nuke event + combat/vitals/mobs/boss snapshots; no partial result.</pre></li><li><strong>Run green and regression</strong><pre>node --test tests/room-nuke.test.mjs tests/online-nuke.test.mjs &amp;&amp; npm test --prefix server</pre></li><li><strong>Commit only task files</strong><pre>git add server/room-nuke.mjs server/server.js js/net.js js/game.js tests/room-nuke.test.mjs tests/online-nuke.test.mjs &amp;&amp; git commit -m &quot;feat: resolve room nuke on server and persist crater&quot;</pre></li></ol>
+<h2>06 / TASK</h2><h3>Task 4: 房主重置所有地形</h3><div class="card"><p><strong>Files:</strong> server/room-authority.mjs (new); server/server.js; js/net.js; js/game.js; js/room-chat.js; index.html; styles/main.css; tests/room-reset.test.mjs; tests/online-nuke.test.mjs</p><p><strong>Interfaces:</strong> Room.hostId:string|null; resetRoomTerrain(room,requester):boolean in server/room-authority.mjs; terrain_reset{revision,editsByDimension}; NetClient.sendTerrainReset(); client Game._applyRoomTerrain(snapshot)。</p><p><strong>Independent deliverable:</strong> 房主确认后清空三维度地形，所有在线者同步，重连不复原旧数据。</p></div>
+<ol><li><strong>Write failing test</strong><pre>test(&#x27;only host resets all dimension edits; Boss timer persists&#x27;,()=&gt;{
+ const host={id:&#x27;h&#x27;},guest={id:&#x27;g&#x27;};
+ const terrain=new RoomTerrain();terrain.setBlock(1,20,1,0,&#x27;nether&#x27;);
+ const r={hostId:&#x27;h&#x27;,terrain,boss:{respawnAt:61000},terrainRevision:0,touch(){}};
+ assert.equal(resetRoomTerrain(r,guest),false);
+ assert.equal(resetRoomTerrain(r,host),true);
+ assert.deepEqual(terrain.editsArray(&#x27;nether&#x27;),[]);
+ assert.equal(r.boss.respawnAt,61000);
+});
+assert.equal(nextHost(new Map([[1,guest],[2,host]])),&#x27;g&#x27;);
+// WebSocket: guest terrain_reset rejected; host accepted; stale revision block ignored;
+// disconnect host =&gt; next member gets hostId; nickname change leaves ID unchanged.</pre></li><li><strong>Run red</strong><pre>node --test tests/room-reset.test.mjs  # expect resetTerrain missing</pre></li><li><strong>Implement minimal behavior</strong><pre>export function resetRoomTerrain(room,peer) {
+ if(peer.id!==room.hostId)return false;
+ room.terrain.clearAll();room.terrainRevision++;room.touch();return true;
+}
+export const nextHost=peers=&gt;[...peers.values()][0]?.id??null;
+// On create set hostId=creator.id; on leave hostId=nextHost(room.peers);
+// on persisted empty room first join claims hostId; nickname never grants privilege.
+// Browser confirm says all player builds and craters disappear; server still checks hostId.
+// On reset event client replaces edits and rebuilds visible chunks; reject stale revision.</pre></li><li><strong>Run green and regression</strong><pre>node --test tests/room-reset.test.mjs tests/online-nuke.test.mjs &amp;&amp; npm test --prefix server &amp;&amp; npm test</pre></li><li><strong>Commit only task files</strong><pre>git add server/room-authority.mjs server/server.js js/net.js js/game.js js/room-chat.js index.html styles/main.css tests/room-reset.test.mjs tests/online-nuke.test.mjs &amp;&amp; git commit -m &quot;feat: allow host-confirmed room terrain reset&quot;</pre></li></ol>
+<h2>07 / TASK</h2><h3>Task 5: 完整联机与浏览器验收</h3><div class="card"><p><strong>Files:</strong> scripts/verify-room-nuke-browser.mjs (new); server/combat-smoke.cjs; README.md</p><p><strong>Interfaces:</strong> 本地独立 MC_DATA_DIR、两房间、至少三个 WebSocket/两页面；不对生产房间操作。</p><p><strong>Independent deliverable:</strong> 自动化核弹、弹坑、重置、Boss 重刷和原 AK/法师/炸弹回归证据。</p></div>
+<ol><li><strong>Write failing test</strong><pre>const roomA=await createRoom(caster);await joinRoom(victim,roomA.code);
+const roomB=await createRoom(outsider);
+await caster.send({t:&#x27;chat&#x27;,text:&#x27;Maydaymayday&#x27;});
+const a=await sync(caster),v=await sync(victim),b=await sync(outsider);
+assert.equal(a.self.hp,20);assert.equal(v.self.hp,0);
+assert.equal(b.self.hp,20);assert.equal(a.boss.hp,0);
+assert.ok(a.edits.length&gt;0);
+await caster.send({t:&#x27;terrain_reset&#x27;});
+assert.deepEqual((await sync(victim)).edits,[]);
+// Browser pageerror=[]; verify T chat, death screen, host confirm.</pre></li><li><strong>Run red</strong><pre>node scripts/verify-room-nuke-browser.mjs  # before wiring expect missing UI/protocol</pre></li><li><strong>Implement minimal behavior</strong><pre>import {chromium} from &#x27;playwright&#x27;;
+const browser=await chromium.launch({headless:true});
+const page=await browser.newPage();const errors=[];
+page.on(&#x27;pageerror&#x27;,e=&gt;errors.push(e.message));
+await page.goto(&#x27;http://127.0.0.1:8086&#x27;);
+// Join isolated local room, exercise T/chat, inspect authoritative snapshots.
+assert.deepEqual(errors,[]);await browser.close();
+// README documents T/Enter/Esc chat, cooldown and host reset.</pre></li><li><strong>Run green and regression</strong><pre>npm test &amp;&amp; npm test --prefix server &amp;&amp; node scripts/verify-room-nuke-browser.mjs &amp;&amp; node server/combat-smoke.cjs</pre></li><li><strong>Commit only task files</strong><pre>git add scripts/verify-room-nuke-browser.mjs server/combat-smoke.cjs README.md &amp;&amp; git commit -m &quot;test: verify room nuke, reset and existing combat&quot;</pre></li></ol>
+<h2>99 / ACCEPTANCE</h2><h3>验收与交付边界</h3><ul><li>两个房间实测核弹跨房间隔离；全部受害者 HP 0，施放者 HP 不变；Boss 60 秒后重刷。</li><li>核弹当前维度弹坑持久化，房主重置清空三维度 edits，旧存档迁移不丢主世界改动。</li><li>聊天恶意文本不执行、频率/冷却生效、非房主不能重置。</li><li>本地浏览器视觉与交互验收、原 AK/法师/炸弹 smoke、根/server 全量测试。</li></ul><div class="warn">尚未实施；本文件仅供审阅与执行。PR #4 尚待上游维护者合并，不能绕过权限或直接声称已部署。</div><p class="meta">本地文件：docs/superpowers/plans/2026-09-22-room-nuke-reset-plan.html</p></main></body></html>

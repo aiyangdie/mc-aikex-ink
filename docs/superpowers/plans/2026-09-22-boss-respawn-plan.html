@@ -1,0 +1,46 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Boss 60 秒再刷新 · 实现计划</title><style>*,*::before,*::after{box-sizing:border-box}body{margin:0;background:#0a0a0a;color:#f5f5f5;font:15px/1.75 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif}main{max-width:1080px;margin:auto;padding:42px 24px 100px}h1{font-size:38px;line-height:1.25;margin:12px 0}h2{color:#737373;font-size:12px;letter-spacing:.15em;margin:52px 0 10px}h3{font-size:24px;margin:0 0 12px}h4{font-size:18px;margin:24px 0 12px}p{color:#a3a3a3}strong{color:#f5f5f5}.eyebrow,.meta{font-size:12px;color:#737373;letter-spacing:.1em}.verdict{border-left:2px solid #34d399;background:rgba(16,185,129,.05);padding:18px 22px;margin:20px 0}.warn{border-left:2px solid #fbbf24;background:rgba(245,158,11,.05);padding:18px 22px;margin:20px 0}.card{border:1px solid #262626;background:rgba(23,23,23,.5);border-radius:14px;padding:20px 24px;margin:20px 0}pre,code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#111;color:#d4d4d4}pre{white-space:pre-wrap;overflow-wrap:anywhere;border-radius:12px;padding:16px;font-size:12.5px;line-height:1.6}code{padding:2px 5px;border-radius:5px}li{margin:7px 0;color:#d4d4d4}.tw{overflow-x:auto;border:1px solid #262626;border-radius:14px}table{width:100%;border-collapse:collapse;min-width:620px;font-size:13px}th,td{text-align:left;padding:10px 13px;border-bottom:1px solid #262626;vertical-align:top}th{background:#141414;color:#a3a3a3}td{color:#d4d4d4}a{color:#7dd3fc}@media(max-width:600px){main{padding:24px 18px 70px}h1{font-size:29px}}</style></head><body><main>
+<div class="eyebrow">IMPLEMENTATION PLAN · 2026-09-22 · REVIEW REQUESTED</div><h1>Boss 60 秒再刷新 · 实现计划</h1>
+<div class="verdict"><strong>For agentic workers:</strong> 执行前由用户选择单会话或子代理方式；逐任务 TDD 红绿、验证并提交，未验证不得声称完成。</div>
+<p><strong>Goal:</strong> 联机和单机 Boss 每次死亡后 60 秒再出现，满血 1500，刷新计时可跨重连/重启。</p><p><strong>Architecture:</strong> RoomBoss 使用 wall-clock respawnAt；Game 单机存档同样记录。所有击杀路径统一调用 kill(now)，避免核弹/AK/近战计时不一致。</p><p><strong>Tech Stack:</strong> Node.js ESM/CommonJS bridge、Three.js、node:test</p><p><strong>Spec:</strong> <code>docs/superpowers/specs/2026-09-22-room-nuke-reset-design.html</code></p>
+<h2>00 / GLOBAL CONSTRAINTS</h2><h3>跨任务硬约束</h3><ul><li>保留原仓库安全/沙箱规则，AGENTS.md 的用户注入差异不得提交。</li><li>人物模型朝向 -Math.PI/2 保持不变；原有 AK、法师、炸弹与 PvP 自动复活继续工作。</li><li>仅在本地服务/临时房间测试；不得对生产联机房间触发核弹或地形重置。</li><li>没有上游写权限；完成后只推 Fork 并提交上游 PR，合并/部署交维护者。</li><li>倒计时严格按真实时间 60_000ms，房间独立，不被地形重置清除。</li></ul>
+<h2>01 / FILE MAP</h2><h3>职责与接口</h3><div class="tw"><table><tr><th>文件</th><th>职责</th></tr><tr><td><code>server/room-boss.mjs</code></td><td>唯一的服务端 Boss 生命周期与死亡时间。</td></tr><tr><td><code>server/server.js</code></td><td>命中路径、tick 与房间持久化接线。</td></tr><tr><td><code>js/game.js</code></td><td>单机倒计时存档和模型重建。</td></tr><tr><td><code>tests/*.test.mjs</code></td><td>计时边界、重载与联机同步回归。</td></tr></table></div>
+<h2>02 / REVIEW FOCUS</h2><h3>最容易遗漏的输入与异常</h3><ol><li>死亡发生在 59.9 秒与 60 秒边界：不能早刷。</li><li>同一帧两个伤害来源同时致死：只能设一次倒计时。</li><li>服务端重启后加载死亡 Boss：应继承原 respawnAt。</li><li>客户端未加载完成时服务器发新 Boss：不得出现两个模型。</li><li>单机读档时倒计时已过：进入世界即可满血刷新。</li></ol>
+<h2>03 / TASK</h2><h3>Task 1: 联机 RoomBoss 权威倒计时</h3><div class="card"><p><strong>Files:</strong> server/room-boss.mjs; server/server.js; tests/room-boss.test.mjs; tests/online-boss.test.mjs</p><p><strong>Interfaces:</strong> RoomBoss.kill(nowMs): boolean; RoomBoss.reviveIfDue(nowMs): boolean; snapshot().respawnAt:number|null; Room.toPersist()/fromPersist().boss 继承该字段。</p><p><strong>Independent deliverable:</strong> 所有服务器 Boss 击杀路径共用死亡时间，重启持久化；到点仅刷新一次。</p></div>
+<ol><li><strong>Write failing test</strong><pre>test(&#x27;Boss does not revive before 60s and revives once at 60s&#x27;,()=&gt;{
+ const flat={getBlock:(x,y,z)=&gt;y&lt;=18?3:0};
+ const b=new RoomBoss(flat,{x:0,y:19,z:0});
+ assert.equal(b.kill(1000),true);
+ assert.equal(b.reviveIfDue(60999),false);
+ assert.equal(b.reviveIfDue(61000),true);
+ assert.equal(b.hp,1500);assert.equal(b.reviveIfDue(61001),false);
+});
+assert.equal(b.kill(61001),false); // duplicate death must not move deadline
+// Extend tests/online-boss.test.mjs with two sockets and a fake wall-clock advance;
+// assert one boss broadcast revives at deadline, and persisted snapshot keeps respawnAt.</pre></li><li><strong>Run red</strong><pre>node --test tests/room-boss.test.mjs  # expect kill/reviveIfDue missing</pre></li><li><strong>Implement minimal behavior</strong><pre>kill(nowMs=Date.now()) {
+ if (this.respawnAt) return false;
+ if(this.hp&gt;0)this.combat.takeDamage(this.hp);
+ this.respawnAt=nowMs+60_000; return true;
+}
+reviveIfDue(nowMs=Date.now()) {
+ if (!this.respawnAt || nowMs&lt;this.respawnAt) return false;
+ this.combat=new BossCombat(1500); this.respawnAt=null;
+ this.position={...this.spawnPosition}; this.attackId=0; return true;
+// Constructor copies spawnPosition={x:saved.spawnX??5.4,y:saved.spawnY??19,z:saved.spawnZ??5.5};
+// constructor loads respawnAt=saved.respawnAt??null; snapshot includes both fields.
+}
+// Route hit() / AK shoot / nuke through kill on lethal; server tick broadcasts revive.</pre></li><li><strong>Run green and regression</strong><pre>node --test tests/room-boss.test.mjs tests/online-boss.test.mjs &amp;&amp; npm test --prefix server</pre></li><li><strong>Commit only task files</strong><pre>git add server/room-boss.mjs server/server.js tests/room-boss.test.mjs tests/online-boss.test.mjs &amp;&amp; git commit -m &quot;feat: respawn shared Boss after one minute&quot;</pre></li></ol>
+<h2>04 / TASK</h2><h3>Task 2: 单机 Boss 倒计时与模型生命周期</h3><div class="card"><p><strong>Files:</strong> js/game.js; js/boss-respawn.js (new); js/mist-boss.js; tests/boss-respawn.test.mjs; tests/boss-save.test.mjs; tests/mist-boss.test.mjs</p><p><strong>Interfaces:</strong> shouldReviveSoloBoss({hp,respawnAt},nowMs):boolean in js/boss-respawn.js; Game._mistBossRespawnAt:number|null; _persist(reason).mistBossRespawnAt; _ensureMistBoss(nowMs=Date.now())。</p><p><strong>Independent deliverable:</strong> 单机死亡保存绝对到期时间，模型清理后重新加载而不重叠。</p></div>
+<ol><li><strong>Write failing test</strong><pre>test(&#x27;solo defeated Boss waits full minute across save/load&#x27;,()=&gt;{
+ const old={hp:0,respawnAt:61000};
+ assert.equal(shouldReviveSoloBoss(old,60999),false);
+ assert.equal(shouldReviveSoloBoss(old,61000),true);
+ // Game integration test stubs scene/world/loader and verifies only one model.
+});
+// Browser test asserts only one Boss scene group after respawn.</pre></li><li><strong>Run red</strong><pre>node --test tests/boss-respawn.test.mjs  # expect missing export</pre></li><li><strong>Implement minimal behavior</strong><pre>export const shouldReviveSoloBoss=(s,now)=&gt;s.hp===0 &amp;&amp; Number.isFinite(s.respawnAt) &amp;&amp; now&gt;=s.respawnAt;
+// On first solo lethal hit:
+this._mistBossRespawnAt ??= Date.now()+60_000;
+this._mistBossState={hp:0}; this._persist(&#x27;boss-defeated&#x27;);
+// In _ensureMistBoss(nowMs), if deadline reached: clear dead state and deadline;
+// create exactly one MistBoss; call load; persist updated state after load.
+// Save/load absolute timestamp, never reset it on level transition.</pre></li><li><strong>Run green and regression</strong><pre>node --test tests/boss-respawn.test.mjs tests/boss-save.test.mjs tests/mist-boss.test.mjs &amp;&amp; npm test</pre></li><li><strong>Commit only task files</strong><pre>git add js/game.js js/boss-respawn.js js/mist-boss.js tests/boss-respawn.test.mjs tests/boss-save.test.mjs tests/mist-boss.test.mjs &amp;&amp; git commit -m &quot;feat: restore solo Boss after one minute&quot;</pre></li></ol>
+<h2>99 / ACCEPTANCE</h2><h3>验收与交付边界</h3><ul><li>联机两端可见 Boss 死亡与 60 秒后重生；重启/重连计时不清零。</li><li>单机关闭游戏再打开，未满 60 秒不刷，已满 60 秒刷一个 1500HP Boss。</li><li>完整 npm test 与 npm test --prefix server 通过；浏览器实际观察模型再出现，无控制台错误。</li></ul><div class="warn">尚未实施；本文件仅供审阅与执行。PR #4 尚待上游维护者合并，不能绕过权限或直接声称已部署。</div><p class="meta">本地文件：docs/superpowers/plans/2026-09-22-boss-respawn-plan.html</p></main></body></html>
