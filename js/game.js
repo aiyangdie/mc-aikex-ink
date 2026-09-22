@@ -4,24 +4,24 @@
  */
 
 import * as THREE from 'three';
-import { Combat } from './combat.js?v=playerstyle7';
+import { Combat } from './combat.js?v=animalfix8';
 import {
   World, Chunk, BlockType, BlockNames, isSolid, Dim,
   CHUNK_SIZE, CHUNK_HEIGHT, RENDER_DISTANCE, getBlockColor, getBreakDrop,
   isMobileDevice, getRenderDistance,
-} from './voxel.js?v=playerstyle7';
-import { AnimalManager } from './animals.js?v=playerstyle7';
-import { SaveManager } from './save.js?v=playerstyle7';
-import { NetClient, RemotePlayers } from './net.js?v=playerstyle7';
-import { Inventory } from './inventory.js?v=playerstyle7';
-import { isFood, isItem, getItemName, getItemColor, getFoodHeal, ItemType } from './items.js?v=playerstyle7';
-import { BombManager, isBomb } from './bombs.js?v=playerstyle7';
-import { tryLightPortal, standingInPortal, spawnReturnPortal } from './portals.js?v=playerstyle7';
-import { EnderDragon } from './dragon.js?v=playerstyle7';
-import { AdminPanel } from './admin-panel.js?v=playerstyle7';
-import { buildStructure } from './structures.js?v=playerstyle7';
-import { summarizeDrops, buildMobDrops } from './loot.js?v=playerstyle7';
-import { apiUrl } from './config.js?v=playerstyle7';
+} from './voxel.js?v=animalfix8';
+import { AnimalManager } from './animals.js?v=animalfix8';
+import { SaveManager } from './save.js?v=animalfix8';
+import { NetClient, RemotePlayers } from './net.js?v=animalfix8';
+import { Inventory } from './inventory.js?v=animalfix8';
+import { isFood, isItem, getItemName, getItemColor, getFoodHeal, ItemType } from './items.js?v=animalfix8';
+import { BombManager, isBomb } from './bombs.js?v=animalfix8';
+import { tryLightPortal, standingInPortal, spawnReturnPortal } from './portals.js?v=animalfix8';
+import { EnderDragon } from './dragon.js?v=animalfix8';
+import { AdminPanel } from './admin-panel.js?v=animalfix8';
+import { buildStructure } from './structures.js?v=animalfix8';
+import { summarizeDrops, buildMobDrops } from './loot.js?v=animalfix8';
+import { apiUrl } from './config.js?v=animalfix8';
 import { MistBoss } from './mist-boss.js';
 import { findStandY } from './boss-navigation.js';
 
