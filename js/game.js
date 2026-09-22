@@ -4,22 +4,22 @@
  */
 
 import * as THREE from 'three';
-import { Combat } from './combat.js?v=mage3';
+import { Combat } from './combat.js?v=lobby17';
 import {
   World, Chunk, BlockType, BlockNames, isSolid, Dim,
   CHUNK_SIZE, CHUNK_HEIGHT, RENDER_DISTANCE, getBlockColor, getBreakDrop,
   isMobileDevice, getRenderDistance,
-} from './voxel.js?v=mage3';
-import { AnimalManager } from './animals.js?v=mage3';
-import { SaveManager } from './save.js?v=mage3';
-import { NetClient, RemotePlayers } from './net.js?v=mage3';
-import { Inventory } from './inventory.js?v=mage3';
-import { isFood, isItem, getItemName, getItemColor, getFoodHeal, ItemType } from './items.js?v=mage3';
-import { BombManager, isBomb } from './bombs.js?v=mage3';
-import { tryLightPortal, standingInPortal, spawnReturnPortal } from './portals.js?v=mage3';
-import { EnderDragon } from './dragon.js?v=mage3';
-import { AdminPanel } from './admin-panel.js?v=mage3';
-import { buildStructure } from './structures.js?v=mage3';
+} from './voxel.js?v=lobby17';
+import { AnimalManager } from './animals.js?v=lobby17';
+import { SaveManager } from './save.js?v=lobby17';
+import { NetClient, RemotePlayers } from './net.js?v=lobby17';
+import { Inventory } from './inventory.js?v=lobby17';
+import { isFood, isItem, getItemName, getItemColor, getFoodHeal, ItemType } from './items.js?v=lobby17';
+import { BombManager, isBomb } from './bombs.js?v=lobby17';
+import { tryLightPortal, standingInPortal, spawnReturnPortal } from './portals.js?v=lobby17';
+import { EnderDragon } from './dragon.js?v=lobby17';
+import { AdminPanel } from './admin-panel.js?v=lobby17';
+import { buildStructure } from './structures.js?v=lobby17';
 import { apiUrl } from './config.js';
 
 /* ============================================

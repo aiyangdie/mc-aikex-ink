@@ -1,7 +1,7 @@
 import * as THREE from 'three';
-import { Mage } from './mage.js?v=mage3';
-import { isSolid } from './voxel.js?v=mage3';
-import { CombatPhysics, pickRandomSpawn } from './physics.js?v=mage3';
+import { Mage } from './mage.js?v=lobby17';
+import { isSolid } from './voxel.js?v=lobby17';
+import { CombatPhysics, pickRandomSpawn } from './physics.js?v=lobby17';
 
 /**
  * AK：联机打玩家；单机/联机本地弹道可打动物（PvE）
@@ -27,7 +27,9 @@ export class Combat {
     this.panel.innerHTML =
       '<button type="button" id="equipAK">切换职业 [Q]</button>' +
       '<button type="button" id="fireAK">开火</button>' +
-      '<button id="blinkMage">闪现 [Shift]</button><button id="buildMode">建造 [B]</button><span id="combatStatus"></span>';
+      '<button type="button" id="blinkMage">闪现 [Z]</button>' +
+      '<button type="button" id="buildMode">建造 [B]</button>' +
+      '<span id="combatStatus"></span>';
     document.body.appendChild(this.panel);
     this.status = this.panel.querySelector('#combatStatus');
 
@@ -53,10 +55,11 @@ export class Combat {
     document.addEventListener('keydown', (e) => {
       if (!game._controlsActive() || /INPUT|TEXTAREA/.test(e.target.tagName)) return;
       if (e.code === 'KeyB' && !e.repeat) this.setMode('build');
-      if ((e.code === 'ShiftLeft' || e.code === 'ShiftRight') && !e.repeat) this.mage.blink();
-      if (e.code === 'KeyQ' && !e.repeat && game._controlsActive() && !/INPUT|TEXTAREA/.test(e.target.tagName)) {
-        this.toggle();
+      if (e.code === 'KeyZ' && !e.repeat) {
+        e.preventDefault();
+        this.mage.blink();
       }
+      if (e.code === 'KeyQ' && !e.repeat) this.toggle();
     });
     document.addEventListener('mousedown', (e) => {
       if (e.button === 0 && game._controlsActive() && (game.isPointerLocked || e.target === game.canvas)) {
@@ -280,7 +283,7 @@ export class Combat {
 
     this.panel.style.display = active ? 'flex' : 'none';
     this.mage.tick(active);
-    this.panel.querySelector('#blinkMage').style.display = this.mode === 'mage' ? '' : 'none';
+    this.panel.querySelector('#blinkMage').style.display = '';
     this.panel.querySelector('#fireAK').textContent = this.mode === 'mage' ? '火球术' : '开火';
     this.gun.visible = active && this.mode === 'ak' && g.player.hp > 0;
 
@@ -301,13 +304,16 @@ export class Combat {
       cross.style.transform = `translate(-50%, -50%) scale(${s})`;
     }
 
+    const blinkCd = Math.ceil(this.mage.cdLeft() / 1000);
+    const blinkTxt = blinkCd > 0 ? `Z闪现 ${blinkCd}s` : 'Z闪现就绪';
     this.status.textContent =
       g.player.hp <= 0
         ? `已阵亡 · ${Math.max(1, Math.ceil((this.deadUntil - Date.now()) / 1000))} 秒后随机复活`
-        : this.mode === 'mage' ? `法师 · 左键火球（燃烧 5 秒） · Shift 闪现 ${Math.max(0, Math.ceil((this.mage.nextBlink-Date.now())/1000)) || '就绪'} · Q 切 AK · B 建造`
-        : this.armed
-          ? 'AK · 可打动物/玩家 · 有击退 · Q 切法师 · B 建造'
-          : 'Q 装备 AK · 子弹带物理 · 复活随机点';
+        : this.mode === 'mage'
+          ? `法师 · 火球 · ${blinkTxt} · Q切AK · B建造`
+          : this.armed
+            ? `AK · ${blinkTxt} · Q切法师 · B建造`
+            : `建造 · ${blinkTxt} · Q开战 · 右键炸弹`;
 
     if (g._fallbackActive) this.status.textContent += ' · WASD 移动 / 右键拖动视角 / Esc 暂停';
     if (!active) this.held = false;
