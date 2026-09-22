@@ -20,6 +20,7 @@ const { URL } = require('url');
 async function main() {
 const { RoomBoss, CollisionWorld } = await import('./room-boss.mjs');
 const { RoomTerrain } = await import('./room-terrain.mjs');
+const { isNukeCode, sanitizeChat } = await import('./room-chat.mjs');
 const { getFoodHeal } = await import('../js/items.js');
 const PORT = Number(process.env.PORT || 3040);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -692,6 +693,13 @@ wss.on('connection', (ws) => {
     }
     const room = peer.room;
 
+    if (msg.t === 'chat') {
+      const now=Date.now(),text=sanitizeChat(msg.text);
+      if(!text||!peer.active||peer.hp<=0||now-(peer.lastChatAt||0)<500)return;
+      peer.lastChatAt=now;
+      if(isNukeCode(msg.text)){send(ws,{t:'err',msg:'核弹功能尚未就绪'});return;}
+      room.broadcast({t:'chat',by:peer.name,text});return;
+    }
     if (msg.t === 'sync') {
       send(ws, room.snapshotFor(ws));
       return;

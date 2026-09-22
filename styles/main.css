@@ -1439,3 +1439,12 @@ body.combat-hurt::after {
   margin: 0 auto;
   accent-color: #ef5350;
 }
+
+/* In-room chat uses the existing pixel HUD vocabulary. */
+#roomChat[hidden],#roomChatForm[hidden],#btnTerrainReset[hidden]{display:none!important}
+#roomChat{position:fixed;bottom:86px;left:18px;width:min(370px,calc(100vw - 36px));z-index:25;color:#f5f5f5;font:13px/1.5 'Courier New',monospace;text-shadow:1px 1px #000;pointer-events:none}
+#roomChatLog{max-height:150px;overflow:auto;background:#0009;padding:6px 9px}
+.room-chat-line{overflow-wrap:anywhere}
+#roomChatForm,#roomChatInput,.room-chat-actions button{pointer-events:auto}
+#roomChatInput{background:#161c22;color:#fff;border:2px solid #eee;padding:8px;width:100%;font:inherit}
+.room-chat-actions{display:flex;align-items:center;justify-content:space-between;background:#0009;padding:3px 8px}

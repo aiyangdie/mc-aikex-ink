@@ -25,6 +25,7 @@ import { buildStructure } from './structures.js?v=mistboss3';
 import { apiUrl } from './config.js';
 import { MistBoss } from './mist-boss.js';
 import { shouldReviveSoloBoss } from './boss-respawn.js';
+import { RoomChat } from './room-chat.js';
 import { findStandY } from './boss-navigation.js';
 
 /* ============================================
@@ -778,6 +779,7 @@ export class Game {
     this._online = false;
     this._terrainRevision = 0;
     this._roomHostId = null;
+    this._chatOpen = false;
     this._hostWaiting = false; // 已建房、仍在大厅等待
     this._pendingJoinMsg = null;
     this._roomPollTimer = null;
@@ -815,6 +817,7 @@ export class Game {
     this.remotes = new RemotePlayers(this.scene, THREE);
     this._bindNet();
     this._initOnlineUI();
+    this.roomChat=new RoomChat({onSend:text=>this.net.sendChat(text),onReset:()=>this._confirmTerrainReset()});
 
     this.adminPanel = new AdminPanel(this);
     this.adminPanel.tryAutoLogin();
@@ -1181,11 +1184,22 @@ export class Game {
     this._persist('auto');
   }
 
+  _openChat(){
+    if(!this.roomChat||!this._online||!this.isRunning)return;
+    this._chatOpen=true;this.player.keys={};
+    if(document.pointerLockElement===this.canvas)document.exitPointerLock();
+    this.roomChat.focus();
+  }
+  _closeChat(){this._chatOpen=false;this.roomChat?.close();}
+  _confirmTerrainReset(){ /* server-side authorization wired in terrain reset task */ }
+
   /** 绑定事件监听 */
   _initEvents() {
     // 键盘事件（桌面端 + 移动端外接键盘通用）
     document.addEventListener('keydown', (e) => {
+      if(this._chatOpen){if(e.code==='Escape'){e.preventDefault();this._closeChat();}return;}
       if (this._dead) return;
+      if(e.code==='KeyT'&&this._online&&this.isRunning){e.preventDefault();this._openChat();return;}
       if (/INPUT|TEXTAREA|SELECT/.test(e.target.tagName) || e.target.isContentEditable) return;
       if (e.code === 'Escape' && this._fallbackActive) { this._pauseFallback(); return; }
       if (!this._controlsActive()) return;
@@ -1241,7 +1255,7 @@ export class Game {
 
     // 鼠标移动（仅桌面端指针锁定后）
     document.addEventListener('mousemove', (e) => {
-      if (this._dead) return;
+      if (this._dead||this._chatOpen) return;
       if (this.isPointerLocked) this.player.onMouseMove(e.movementX, e.movementY);
       else if (this._fallbackActive && this._lookDrag) {
         const dx = e.clientX - this._lookDrag.x, dy = e.clientY - this._lookDrag.y;
@@ -1253,7 +1267,7 @@ export class Game {
 
     // 鼠标：左键攻击/破坏，右键放置（对标我的世界）
     document.addEventListener('mousedown', (e) => {
-      if (this._dead) return;
+      if (this._dead||this._chatOpen) return;
       if (!this._controlsActive() || (!this.isPointerLocked && e.target !== this.canvas)) return;
       if (this._fallbackActive && e.button === 2) {
         this._lookDrag = { x: e.clientX, y: e.clientY, distance: 0 }; return;
@@ -1310,7 +1324,7 @@ export class Game {
           this._fallbackActive = false;
           this.ui.pauseScreen.style.display = 'none';
           this._showGameUI(true);
-        } else if (this.isRunning) {
+        } else if (this.isRunning && !this._chatOpen) {
           this.player.keys = {};
           this.ui.pauseScreen.style.display = 'flex';
           this._persist('auto'); // 暂停时自动存
@@ -2108,6 +2122,7 @@ export class Game {
     this.net.on('combat', msg => this.combat?.receive(msg));
     this.net.on('shot', msg => this.combat?.trace(msg));
     this.net.on('boss', msg => this._syncOnlineBoss(msg.boss));
+    this.net.on('chat',msg=>this.roomChat?.append(msg.by,msg.text));
     this.net.on('vitals', msg => {
       if (!this._online || this._hostWaiting || !Number.isFinite(msg.hp)) return;
       this.player.hp = Math.max(0,Math.min(20,msg.hp));
@@ -2162,6 +2177,7 @@ export class Game {
       this._refreshRoomList();
     });
     this.net.on('close', () => {
+      this.roomChat?.hide();this._chatOpen=false;
       if (this._online || this._hostWaiting) {
         this._clearMistBoss();
         this._netBossState = null;
@@ -2310,6 +2326,7 @@ export class Game {
     if (msg.self) this.combat?.receive(msg.self);
     this._terrainRevision=Number.isSafeInteger(msg.terrainRevision)?msg.terrainRevision:0;
     this._roomHostId=msg.hostId||null;
+    this.roomChat?.host(this._roomHostId===this.net.id);
     const edits=msg.editsByDimension||{overworld:msg.edits||[]};
     for(const dim of [Dim.OVERWORLD,Dim.NETHER,Dim.END])this._dimEdits[dim]=SaveManager.arrayToEdits(edits[dim]||[]);
     this.world.edits=this._dimEdits[this.dimension];
@@ -2343,6 +2360,7 @@ export class Game {
     this._hostWaiting = false;
     this.net.startHeartbeat();
     this._applyRoomState(msg);
+    this.roomChat?.show();
     this._dead = false;
     document.getElementById('deathScreen').hidden = true;
     if (msg.self) {
