@@ -48,6 +48,7 @@ async function run() {
     assert.equal(reborn.hp, 20); assert.ok([reborn.x, reborn.y, reborn.z].every(Number.isFinite));
     b.send({ t: 'move', x: 5.4, y: 50, z: 22.6, yaw: 0, pitch: 0, dimension: 'overworld' });
     a.send({ t: 'move', x: 5.4, y: 50, z: 32.6, yaw: 0, pitch: 0, dimension: 'overworld' });
+
     await delay(80);
     a.send({ t: 'shoot', direction: [0, 0, -1], distance: 80 });
     await delay(100);

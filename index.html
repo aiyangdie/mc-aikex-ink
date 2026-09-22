@@ -5,13 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <meta name="description" content="像素方块世界 - 单机存档 / 真实联机房间" />
   <title>像素方块世界</title>
-  <link rel="stylesheet" href="styles/main.css?v=lobby17" />
+  <link rel="stylesheet" href="styles/main.css?v=mistboss3" />
+
   <script type="importmap">
-    {
-      "imports": {
-        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
-      }
+  {
+    "imports": {
+      "three": "./vendor/three/three.module.js",
+      "three/addons/": "./vendor/three/addons/"
     }
+  }
   </script>
 </head>
 <body>
@@ -56,6 +58,21 @@
     <div id="saveToast" class="save-toast"></div>
   </div>
 
+  <section id="bossHud" hidden aria-label="迷雾档案 Boss 血量">
+    <div class="boss-heading"><span>迷雾档案 · 主人公</span><span id="bossHpText">1500 / 1500</span></div>
+    <progress id="bossHealth" max="1500" value="1500">1500 / 1500</progress>
+    <div id="bossStatus">发现你了 · 保持距离，躲开挥砍</div>
+  </section>
+  <section id="deathScreen" hidden role="dialog" aria-modal="true" aria-labelledby="deathTitle">
+    <div class="death-card">
+      <p class="death-eyebrow">YOU DIED</p>
+      <h1 id="deathTitle">你倒下了</h1>
+      <p id="deathReason">生命值已耗尽</p>
+      <p class="death-note">背包保留 · 复活后有 3 秒保护时间</p>
+      <button id="btnRespawn" type="button" class="game-btn primary">重新站起来</button>
+    </div>
+  </section>
+
   <!-- 开始大厅 -->
   <div id="startScreen">
     <div class="lobby">
@@ -68,7 +85,7 @@
         <!-- 左：单机 -->
         <section class="lobby-card" id="soloCard">
           <h2 class="lobby-h">单机</h2>
-          <p class="lobby-desc">进度保存在本机浏览器</p>
+          <p class="lobby-desc">进度保存在本机浏览器 · 新增迷雾档案 Boss</p>
           <div id="saveMeta" class="save-meta" style="display:none"></div>
           <div class="lobby-actions">
             <button type="button" id="btnContinue" class="game-btn primary" style="display:none">继续游戏</button>
@@ -153,6 +170,7 @@
     <div id="mobileHotbar"></div>
   </div>
 
-  <script type="module" src="js/game.js?v=lobby17"></script>
+  <script type="module" src="js/game.js?v=mistboss3"></script>
+
 </body>
 </html>

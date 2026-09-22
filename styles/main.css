@@ -1393,6 +1393,25 @@ body.combat-hurt::after {
   from { opacity: 1; }
   to { opacity: 0; }
 }
+/* Boss/death use the existing game's monospace, bordered buttons and HUD. */
+#bossHud[hidden], #deathScreen[hidden] { display: none; }
+#bossHud { position: fixed; top: 56px; left: 50%; transform: translateX(-50%); width: min(440px, 70vw); z-index: 25; color: #fff; text-shadow: 0 2px 3px #000; pointer-events: none; }
+.boss-heading { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; font-weight: bold; }
+#bossHealth { display: block; appearance: none; width: 100%; height: 13px; margin: 9px 0 6px; border: 2px solid #35202a; background: #271b24; }
+#bossHealth::-webkit-progress-bar { background: #271b24; }
+#bossHealth::-webkit-progress-value { background: #c64156; }
+#bossHealth::-moz-progress-bar { background: #c64156; }
+#bossStatus { text-align: center; font-size: 12px; }
+#deathScreen { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; background: rgba(30,4,10,.8); color: #fff; text-align: center; }
+.death-card { padding: 36px 24px; max-width: 460px; }
+.death-eyebrow { color: #f19a9f; letter-spacing: 6px; font-size: 13px; margin-bottom: 16px; }
+#deathTitle { font-size: clamp(36px,8vw,56px); text-shadow: 4px 4px #310910; margin-bottom: 20px; }
+#deathReason { font-size: 16px; line-height: 1.7; }
+.death-note { color: #d9bfc3; font-size: 12px; margin: 14px 0 30px; }
+#btnRespawn { min-width: 220px; min-height: 48px; }
+#btnRespawn:focus-visible { outline: 3px solid #fff; outline-offset: 5px; }
+@media(max-width:600px) { #bossHud { top: 60px; width: 80vw; } }
+
 
 /* 动物血条 */
 #mobLabels {

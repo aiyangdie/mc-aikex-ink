@@ -1,7 +1,8 @@
 import * as THREE from 'three';
-import { Mage } from './mage.js?v=lobby17';
-import { isSolid } from './voxel.js?v=lobby17';
-import { CombatPhysics, pickRandomSpawn } from './physics.js?v=lobby17';
+import { Mage } from './mage.js?v=mistboss3';
+import { isSolid } from './voxel.js?v=mistboss3';
+import { CombatPhysics, pickRandomSpawn } from './physics.js?v=mistboss3';
+
 
 /**
  * AK：联机打玩家；单机/联机本地弹道可打动物（PvE）
@@ -232,6 +233,10 @@ export class Combat {
   _onBulletHit(target, dir, damage) {
     const g = this.game;
     if (!target) return;
+    if (target === g._mistBoss) {
+      if (!g._online) g._attackMob(target); // online shot damage is server owned
+      this._flashHit(target.dead); return;
+    }
     const result = target.takeDamage?.(damage, dir, 8);
     this._flashHit(!!result?.dead);
     if (target === g._dragon && result?.dead) g._onDragonDefeated?.();
@@ -324,7 +329,7 @@ export class Combat {
       this.lastHp = g.player.hp;
     }
 
-    if (!g._online && g.player.hp <= 0) {
+    if (!g._online && !g._dead && g.player.hp <= 0) {
       if (!this.deadUntil) {
         this.deadUntil = Date.now() + 3000;
         this.held = false;

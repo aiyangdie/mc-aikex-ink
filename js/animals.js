@@ -3,8 +3,9 @@
  * 地狱：敌对侦察机
  */
 import * as THREE from 'three';
-import { BlockType, isSolid, Dim } from './voxel.js?v=lobby17';
-import { ItemType } from './items.js?v=lobby17';
+import { BlockType, isSolid, Dim } from './voxel.js?v=mistboss3';
+import { ItemType } from './items.js?v=mistboss3';
+
 
 const SPAWN_RADIUS = 28;
 const MIN_SPAWN_DIST = 4;

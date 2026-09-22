@@ -5,7 +5,8 @@
  * - 随机安全复活点
  */
 import * as THREE from 'three';
-import { isSolid, Dim } from './voxel.js?v=lobby17';
+import { isSolid, Dim } from './voxel.js?v=mistboss3';
+
 
 const BULLET_SPEED = 95;
 const BULLET_GRAVITY = -18;
@@ -157,8 +158,12 @@ export class CombatPhysics {
     if (g._dragon && !g._dragon.dead) {
       const t = g._dragon.hitDistance(from, dir, dist);
       if (t < bestT) {
-        best = g._dragon;
+        bestT = t; best = g._dragon;
       }
+    }
+    if (g._mistBoss && !g._mistBoss.dead) {
+      const t = g._mistBoss.hitDistance(from, dir, dist);
+      if (t < bestT) { bestT = t; best = g._mistBoss; }
     }
     return best;
   }

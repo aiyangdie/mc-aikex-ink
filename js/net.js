@@ -96,7 +96,7 @@ export class NetClient {
       this._emit('sync', msg);
       return;
     }
-    if (['combat', 'shot', 'fireball', 'fire'].includes(msg.t)) this._emit(msg.t, msg);
+    if (['boss','vitals','respawned','combat','shot','fireball','fire'].includes(msg.t)) this._emit(msg.t, msg);
     else if (msg.t === 'block') this._emit('block', msg);
     else if (msg.t === 'move') this._emit('move', msg);
     else if (msg.t === 'peer') this._emit('peer', msg);
@@ -172,7 +172,7 @@ export class NetClient {
     this._send({ t: 'block', x: x | 0, y: y | 0, z: z | 0, b: b | 0 });
   }
 
-  tickMove(dt, player) {
+  tickMove(dt, player, dimension = 'overworld') {
     if (!this.room) return;
     this._moveAcc += dt;
     if (this._moveAcc < 0.08) return;

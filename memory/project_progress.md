@@ -1,0 +1,25 @@
+
+## 2026-09-22 迷雾档案 Boss
+- 用户要求：原骨骼人物直接移植、1500 HP、追击挥砍、联机共享 Boss、push/合并/部署。
+- 最后明确约束：人物朝向保持当前 -Math.PI/2，不再调整。
+- 功能分支 feat/mist-archives-boss，已兼容 main 9cb114d 的 AK、物理弹道、随机 PvP 复活。
+- Boss 每刀5伤害，玩家20HP；Boss死亡持久化；被Boss击杀手动复活并保护3秒，PvP自动复活独立。
+- 模型归一化必须先 group.updateMatrixWorld(true)，更新 SkinnedMesh 的 bindMatrixInverse，不能只 updateWorldMatrix；回归测试重算 skinned bounding boxes，避免缓存掩盖模型沉地。
+- 浏览器本地实测模型显示、1500→1485枪击、Boss致死和复活20HP；控制台无错误。两个真实WebSocket验证共享血量/死亡/保护；原PvP smoke通过。
+- Review发现无cause的零HP vitals可能困住PvP自动复活，已按cause限制为Boss并加红绿回归。
+- 部署路径：PR→另一人Approve→main→GitHub Actions Deploy production（self-hosted mc-prod）；不绕过仓库协作约定。生产机IP未知，不猜SSH、不操作其他生产服务。
+- 本条记录时尚未push/合并/部署，后续以GitHub状态为准。
+
+### 收尾状态
+- 本地提交 `bc0d8fe`，分支干净；最终测试根目录 23/23、server 9/9；浏览器 AK 1500→1485、死亡/复活与原PvP smoke通过。
+- push 被 GitHub 明确拒绝：403，`Permission to aiyangdie/mc-aikex-ink.git denied to biily786063474-boop`。
+- API确认当前账号权限 push:false / pull:true；因此没有创建PR、没有合并、没有部署，没有改动生产服务。
+- 需要仓库owner给当前账号Write权限或由有权限的协作者接手；不绕过拒绝。部署前还需重新fetch：权限检查时远端main已推进到3c3f01c，本地测试基线为9cb114d。
+
+### 2026-09-22 Fork/PR 更新
+- 用户已 Fork 到 `biily786063474-boop/mc-aikex-ink`，确认该 Fork push:true；上游仍 push:false。
+- 已将上游 mage/bombs/AK 代码合并入 Boss 分支，提交 `7229b20`；人物朝向未改。
+- 最新合并后根目录测试 23/23、server 测试 11/11；本地浏览器模型、AK 打 Boss 1500→1485、死亡和20HP复活无控制台错误；原联机 smoke AK/mage 通过。
+- 分支已推送 Fork `feat/mist-archives-boss`；向上游 `aiyangdie/mc-aikex-ink:main` 创建 PR #4，状态 OPEN、MERGEABLE、无 checks、尚无 review。
+- 仍无上游写权限，不能合并 PR 或触发上游 main 部署。需上游 maintainer 按 CONTRIBUTING.md 审核/合并，再核查 GitHub Actions 和线上站点。
+- 当前工作区 AGENTS.md 有用户注入的 claude-mem context 差异，绝不提交或覆盖。

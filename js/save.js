@@ -75,6 +75,7 @@ export const SaveManager = {
         selectedSlot: state.selectedSlot | 0,
         hp: state.hp != null ? state.hp : 20,
         inventory: state.inventory || null,
+        mistBoss: state.mistBoss || null,
         player: {
           x: +state.player.x,
           y: +state.player.y,
