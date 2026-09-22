@@ -2,7 +2,7 @@
  * 管理面板：传送 / 给物 / 刷怪 / 飞行 / 授权 / 自定义目录
  * 打开：按 `（反引号）
  */
-import { apiUrl } from './config.js?v=playerstats6';
+import { apiUrl } from './config.js?v=playerstyle7';
 
 const AUTH_KEY = 'voxel-admin-key';
 const AUTH_TOKEN = 'voxel-admin-token';
