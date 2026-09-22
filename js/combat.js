@@ -289,7 +289,8 @@ export class Combat {
 
   tick(dt = 0.016) {
     const g = this.game;
-    const active = g._controlsActive();
+    const locked = performance.now() < (g.player.lockedUntil || 0);
+    const active = g._controlsActive() && !locked;
 
     this.physics.tick(dt);
 
