@@ -44,7 +44,8 @@ try{
    const g=window.__testGame;g.player.adminFly=true;g.player.position.set(x,20,80);
    g.net._send({t:'move',x,y:20,z:80,dimension:'overworld',yaw:0,pitch:0});
  },x);
- await host.bringToFront();
+ await host.bringToFront();await host.mouse.click(600,400);
+ await host.waitForFunction(()=>window.__testGame._fallbackActive);
  await host.mouse.move(500,400);await host.mouse.move(540,400);
  const yaw=await host.evaluate(()=>window.__testGame.player.yaw);
  assert.notEqual(yaw,0,'fallback hover must rotate without button');
@@ -78,6 +79,18 @@ try{
  await host.mouse.click(600,400);await host.keyboard.press('n');
  await host.waitForFunction(()=>window.__testGame.nukeVisual.hand.visible);
  await mkdir('docs/verification',{recursive:true});await host.screenshot({path:'docs/verification/handheld-nuke-held.png'});
+ // Observe protocol before the unchanged production handler applies terrain edits.
+ await host.evaluate(()=>{
+   const g=window.__testGame,receive=g.net._onMsg;
+   g.__nukeEvidence={spawns:[],impacts:[],errors:[]};
+   g.net._onMsg=function(msg){
+     if(msg.t==='nuke_projectile'&&msg.phase==='spawn')g.__nukeEvidence.spawns.push(msg);
+     if(msg.t==='err')g.__nukeEvidence.errors.push(msg.msg);
+     if(msg.t==='nuke')g.__nukeEvidence.impacts.push({origin:msg.origin,dimension:msg.dimension,
+       changed:msg.edits.filter(([x,y,z,b])=>g.world.getBlock(x,y,z)!==b)});
+     return receive.call(this,msg);
+   };
+ });
  await host.mouse.click(600,400,{button:'right'});
  await host.waitForFunction(()=>window.__testGame.nukeVisual.projectiles.size>0);
  await host.screenshot({path:'docs/verification/handheld-nuke-flight.png'});
@@ -91,8 +104,28 @@ try{
  assert.equal(await outsider.locator('#deathScreen').isVisible(),false);
  assert.ok(await host.locator('#nukeFlash').count(),'blast flash overlay visible in DOM');
  const state=await host.evaluate(()=>({hp:window.__testGame.player.hp,edits:window.__testGame.world.edits.size}));
- assert.equal(state.hp,casterHpBefore,'nuke must not damage its caster');assert.ok(state.edits>0);
- await mkdir('docs/verification',{recursive:true});await host.screenshot({path:'docs/verification/room-nuke-local.png'});
+ assert.equal(state.hp,casterHpBefore,'nuke must not damage its caster');
+ assert.ok(state.edits>editsBefore,'nuke must add edits beyond procedural baseline');
+ const impact=await host.evaluate(()=>window.__testGame.__nukeEvidence.impacts[0]);
+ assert.equal(impact.dimension,'overworld');
+ const changedNearImpact=impact.changed.filter(([x,y,z,b])=>b===0&&Math.hypot(x-impact.origin.x,y-impact.origin.y,z-impact.origin.z)<=12);
+ assert.ok(changedNearImpact.length>0,'authoritative impact must remove previously solid blocks within crater radius');
+ assert.equal(await host.evaluate(blocks=>blocks.every(([x,y,z,b])=>window.__testGame.world.getBlock(x,y,z)===b),changedNearImpact),true);
+ await host.waitForFunction(()=>window.__testGame.nukeVisual.projectiles.size===0);
+ // Exercise both the real second right click and a direct intent rejected by the server.
+ await host.bringToFront();await host.mouse.click(600,400,{button:'right'});
+ await host.waitForFunction(()=>document.getElementById('saveToast').textContent==='核弹冷却中');
+ assert.equal(await host.evaluate(()=>window.__testGame.nukeVisual.projectiles.size),0);
+ await host.evaluate(()=>window.__testGame.net._send({t:'nuke_throw'}));
+ await host.waitForFunction(()=>window.__testGame.__nukeEvidence.errors.some(text=>/冷却/.test(text)));
+ await sleep(250);
+ const denied=await host.evaluate(()=>({spawns:window.__testGame.__nukeEvidence.spawns.length,impacts:window.__testGame.__nukeEvidence.impacts.length,
+   edits:window.__testGame.world.edits.size,unlocked:window.__testGame.nukeUnlocked,projectiles:window.__testGame.nukeVisual.projectiles.size}));
+ assert.deepEqual(denied,{spawns:1,impacts:1,edits:state.edits,unlocked:true,projectiles:0});
+ console.log('PASS crater delta / actual changed impact blocks / rejected second throw', {baseline:editsBefore,edits:state.edits,changedNearImpact:changedNearImpact.length,origin:impact.origin});
+ // Explicit elevated downward view, not the near-camera launch direction.
+ await host.evaluate(origin=>{const p=window.__testGame.player;p.position.set(origin.x,origin.y+16,origin.z+16);p.yaw=0;p.pitch=-Math.PI/4;},impact.origin);
+ await sleep(250);await host.screenshot({path:'docs/verification/room-nuke-local.png'});
  await host.locator('#btnTerrainReset').waitFor({state:'visible'});
  host.once('dialog',dialog=>dialog.accept());await host.locator('#btnTerrainReset').click();
  await host.waitForFunction(()=>window.__testGame.world.edits.size===0,null,{timeout:12000});
