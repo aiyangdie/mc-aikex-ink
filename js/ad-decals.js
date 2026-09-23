@@ -1,9 +1,8 @@
 /** Deterministic, visual adverts attached to exposed voxel faces. */
 import * as THREE from 'three';
+import {DIAMOND_ORE_ID} from './diamond-ore.js';
 
 export const AD_TEXT = '激情大戏：spb.biily.top';
-export const AD_MAX_PER_CHUNK = 3;
-const ELIGIBLE = new Set([1, 2, 3, 4, 11, 12, 14, 15]);
 const FACES = [[0,1,0],[0,0,1],[0,0,-1],[1,0,0],[-1,0,0]];
 
 function hash(value) {
@@ -12,23 +11,26 @@ function hash(value) {
   return h >>> 0;
 }
 
+/** The qualification belongs to the ore, not its current exposure or edits. */
+export function hasDiamondMicrotext(seed,dimension,x,y,z) {
+  return dimension==='overworld' && hash(`${seed}|${dimension}|${x}|${y}|${z}|microtext`)%4===0;
+}
+
 /** Coordinates and face are world-space; selection needs no DOM. */
-export function selectAdDecals({seed,dimension,cx,cz,getBlock,maxPerChunk=AD_MAX_PER_CHUNK}) {
-  const candidates=[];
+export function selectAdDecals({seed,dimension,cx,cz,getBlock}) {
+  if(dimension!=='overworld')return [];
+  const ads=[];
   const x0=cx*16,z0=cz*16;
   for(let y=1;y<48;y++) for(let z=z0;z<z0+16;z++) for(let x=x0;x<x0+16;x++) {
-    if(!ELIGIBLE.has(getBlock(x,y,z))) continue;
-    const score=hash(String(seed)+'|'+dimension+'|'+x+'|'+y+'|'+z);
-    if(score % 103 > 2) continue;
+    if(getBlock(x,y,z)!==DIAMOND_ORE_ID || !hasDiamondMicrotext(seed,dimension,x,y,z))continue;
     for(const face of FACES) {
       const neighbor=getBlock(x+face[0],y+face[1],z+face[2]);
-      if(neighbor!==0 && neighbor!==7 && neighbor!==13) continue;
-      candidates.push({x,y,z,face,score:hash(String(score)+'|'+face.join(','))});
+      if(neighbor!==0 && neighbor!==7 && neighbor!==13)continue;
+      ads.push({x,y,z,face});
       break;
     }
   }
-  candidates.sort((a,b)=>a.score-b.score || a.y-b.y || a.z-b.z || a.x-b.x);
-  return candidates.slice(0,Math.max(0,Math.min(AD_MAX_PER_CHUNK,maxPerChunk))).map(({score,...ad})=>ad);
+  return ads;
 }
 
 /** One high-resolution texture shared by all chunks in a World. */

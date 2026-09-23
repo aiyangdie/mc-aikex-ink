@@ -6,7 +6,7 @@
 import * as THREE from 'three';
 import { SimplexNoise } from './noise.js?v=groundfix9';
 import { selectAdDecals, createAdTexture } from './ad-decals.js';
-import { selectDiamondOrePositions } from './diamond-ore.js';
+import { selectDiamondOrePositions, DIAMOND_ORE_ID } from './diamond-ore.js';
 
 /* ============================================
    常量与配置
@@ -49,7 +49,7 @@ export const BlockType = {
   PORTAL: 13,      // 传送门（可穿过）
   END_STONE: 14,   // 末地石
   PLANKS: 15,      // 木板 · 造房子
-  DIAMOND_ORE: 16, // 钻石矿
+  DIAMOND_ORE: DIAMOND_ORE_ID, // 钻石矿
 };
 
 export const BlockNames = {
@@ -565,7 +565,7 @@ export class Chunk {
       const up=ny ? [0,0,-1] : [0,1,0];
       const base=positions.length/3;
       for (const [u,v] of [[0,0],[1,0],[1,1],[0,1]]) {
-        positions.push(...center.map((c,i)=>c+(u-.5)*.94*right[i]+(v-.5)*.78*up[i]));
+        positions.push(...center.map((c,i)=>c+(u-.5)*.46*right[i]+(v-.5)*.28*up[i]));
         normals.push(nx,ny,nz);uvs.push(u,v);
       }
       indices.push(base,base+1,base+2,base,base+2,base+3);

@@ -1,3 +1,5 @@
+export const DIAMOND_ORE_ID = 16;
+
 /** Repeatable ore quota and placement, independent of chunk load order. */
 function hash(value) {
   let h=2166136261;
