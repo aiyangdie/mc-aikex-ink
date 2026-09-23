@@ -38,15 +38,11 @@ export function createAdTexture() {
   const canvas=document.createElement('canvas');
   canvas.width=1024;canvas.height=512;
   const ctx=canvas.getContext('2d');
-  ctx.fillStyle='#111b25';ctx.fillRect(0,0,1024,512);
-  ctx.strokeStyle='#ffd05a';ctx.lineWidth=18;ctx.strokeRect(16,16,992,480);
-  ctx.fillStyle='#ffd05a';ctx.fillRect(36,36,952,8);
   ctx.textAlign='center';ctx.textBaseline='middle';
   const [headline,domain]=AD_TEXT.split('：');
-  ctx.fillStyle='#fff8df';
+  ctx.fillStyle='#000000';
   ctx.font='bold 122px "PingFang SC", "Microsoft YaHei", sans-serif';
   ctx.fillText(headline+'：',512,195,920);
-  ctx.fillStyle='#ffd05a';
   ctx.font='bold 83px ui-monospace, SFMono-Regular, Menlo, monospace';
   ctx.fillText(domain,512,360,940);
   const texture=new THREE.CanvasTexture(canvas);

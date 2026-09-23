@@ -110,6 +110,12 @@ test('Game creation, dimension switch, and terrain reset preserve final exposed 
   const outcome=await page.evaluate(async()=>{
     const {selectAdDecals}=await import('/js/ad-decals.js');
     const g=window.__game,w=g.world;
+    const adCanvas=w.adMaterial.map.image;
+    const pixels=adCanvas.getContext('2d').getImageData(0,0,adCanvas.width,adCanvas.height).data;
+    const transparentCorner=pixels[3]===0;
+    let blackInk=false;
+    for(let i=0;i<pixels.length;i+=4)if(pixels[i+3]>0){blackInk=pixels[i]===0&&pixels[i+1]===0&&pixels[i+2]===0;break;}
+    const noBackground={transparentCorner,blackInk,materialTransparent:w.adMaterial.transparent};
     g._online=true;g.renderDistance=2;
     const clear=()=>{for(const c of w.chunks.values())c.dispose();w.chunks.clear();};
     const expected=()=>[...w.chunks.values()].map(c=>{
@@ -132,10 +138,13 @@ test('Game creation, dimension switch, and terrain reset preserve final exposed 
     for(const c of w.chunks.values())c.blocks.fill(0);
     g._replaceRoomTerrain({revision:1,editsByDimension:{overworld:[],nether:[],end:[]}});
     const reset={total:w.chunks.size,matching:expected().filter(Boolean).length};
-    return {orders,created,dimension,reset};
+    return {orders,created,dimension,reset,noBackground};
   });
   await t.test('both creation orders converge on fully loaded exposed faces',()=>{
     assert.deepEqual(outcome.orders,[outcome.created,outcome.created]);
+  });
+  await t.test('microtext is black ink on a transparent texture with no backing',()=>{
+    assert.deepEqual(outcome.noBackground,{transparentCorner:true,blackInk:true,materialTransparent:true});
   });
   await t.test('dimension switch attaches each generated decal mesh',()=>{
     assert.equal(outcome.dimension.meshes,0,'Nether has no diamond microtext');

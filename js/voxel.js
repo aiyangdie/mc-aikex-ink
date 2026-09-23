@@ -644,7 +644,7 @@ export class World {
       depthWrite: true,
     });
     this.adMaterial = new THREE.MeshBasicMaterial({
-      map: createAdTexture(), side: THREE.FrontSide, transparent: false, depthWrite: true,
+      map: createAdTexture(), side: THREE.FrontSide, transparent: true, depthWrite: false,
     });
     this.waterMaterial = new THREE.MeshLambertMaterial({
       map: texture,
