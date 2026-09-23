@@ -31,17 +31,42 @@ function settle(room,p,now){
  room.nukeProjectile=null;
  return event?{status:'impact',event}:{status:'rejected',reason:'terrain-rejected'};
 }
+// Traverse every voxel intersected by the segment, including its initial cell.
+// Endpoint sampling alone misses segments clipping a voxel near an edge/corner.
+function firstSolidOnSegment(world,start,end){
+ const axes=['x','y','z'],delta=axes.map(a=>end[a]-start[a]);
+ const cell=axes.map(a=>Math.floor(start[a]));
+ const step=delta.map(Math.sign);
+ const stride=delta.map(d=>d===0?Infinity:1/Math.abs(d));
+ const crossing=axes.map((a,i)=>delta[i]===0?Infinity:
+  (cell[i]+(step[i]>0?1:0)-start[a])/delta[i]);
+ let t=0;
+ while(t<=1){
+  if(isSolid(world.getBlock(...cell))){
+   if(t===0)return {x:start.x,y:start.y,z:start.z};
+   // Nudge a boundary hit into its solid cell for stable floor-based consumers.
+   return Object.fromEntries(axes.map((a,i)=>[a,
+    Math.max(cell[i]+1e-9,Math.min(cell[i]+1-1e-9,start[a]+delta[i]*t))]));
+  }
+  t=Math.min(...crossing);
+  if(t>1)break;
+  // Tied crossings enter the diagonal cell directly, not zero-length side cells.
+  for(let i=0;i<3;i++)if(crossing[i]===t){cell[i]+=step[i];crossing[i]+=stride[i];}
+ }
+ return null;
+}
 export function stepNukeProjectile(room,p,dt,now=Date.now()){
  if(!p||room.nukeProjectile!==p||!Number.isFinite(dt)||dt<=0||!Number.isFinite(now)||now<p.startedAt)return null;
  const world=collisionFor(room,p.dimension);
- // Small time slices bound movement below a voxel, including delayed ticks.
+ // Small slices approximate the ballistic curve; DDA sweeps each entire segment.
  let remaining=Math.min(dt,MAX_SECONDS-p.elapsed);
  while(remaining>1e-9){
   const h=Math.min(remaining,.005);
   const next={x:p.x+p.vx*h,y:p.y+p.vy*h-GRAVITY*h*h/2,z:p.z+p.vz*h};
+  const hit=firstSolidOnSegment(world,p,next);
+  if(hit){Object.assign(p,hit);return settle(room,p,now);}
   if(!validNukeOrigin(next))return settle(room,p,now);
   Object.assign(p,next);p.vy-=GRAVITY*h;p.elapsed+=h;remaining-=h;
-  if(isSolid(world.getBlock(Math.floor(p.x),Math.floor(p.y),Math.floor(p.z))))return settle(room,p,now);
  }
  if(p.elapsed>=MAX_SECONDS-1e-9||now-p.startedAt>=MAX_SECONDS*1000)return settle(room,p,now);
  return {status:'flying'};

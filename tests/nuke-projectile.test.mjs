@@ -64,3 +64,20 @@ test('world boundary settles at the last valid location rather than creating out
  assert.equal(result.status,'impact');assert.ok(result.event.origin.x<=4096);
  assert.ok(result.event.edits.every(([x,y,z])=>Math.abs(x)<=4096&&Math.abs(z)<=4096&&y>=0&&y<48));
 });
+test('sweep hits the first solid voxel even when a segment only grazes its corner',()=>{
+ const {room,peer}=fixture();Object.assign(peer,{x:.98,y:34,z:1.04,yaw:-Math.PI/4});
+ for(let x=-1;x<=2;x++)for(let z=-1;z<=2;z++)room.terrain.setBlock(x,35,z,0);
+ room.terrain.setBlock(1,35,1,1);
+ const p=api.beginNukeThrow(room,peer,10000);
+ const result=api.stepNukeProjectile(room,p,.005,10005);
+ assert.equal(result.status,'impact');
+ assert.deepEqual([result.event.origin.x,result.event.origin.y,result.event.origin.z].map(Math.floor),[1,35,1]);
+ assert.ok(result.event.origin.x<1.001);
+});
+test('an embedded launch settles before leaving the initial solid voxel',()=>{
+ const {room,peer}=fixture();Object.assign(peer,{x:.999,y:34,z:.5,yaw:-Math.PI/2});
+ room.terrain.setBlock(0,35,0,1);room.terrain.setBlock(1,35,0,0);
+ const p=api.beginNukeThrow(room,peer,10000);
+ const result=api.stepNukeProjectile(room,p,.005,10005);
+ assert.equal(result.status,'impact');assert.deepEqual(result.event.origin,{x:.999,y:35.5,z:.5});
+});
