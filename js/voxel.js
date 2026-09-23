@@ -648,6 +648,17 @@ export class World {
     chunk.adConfig = {seed:this.seed,dimension:()=>this.dimension,material:this.adMaterial};
   }
 
+  refreshAdjacentDecals(cx,cz) {
+    for (const [dx,dz] of [[-1,0],[1,0],[0,-1],[0,1]]) {
+      const chunk=this.chunks.get(this.chunkKey(cx+dx,cz+dz));
+      if (!chunk) continue;
+      const attached=!!chunk.mesh?.parent;
+      chunk._disposeDecals();
+      chunk._buildDecals((x,y,z)=>this.getBlock(x,y,z));
+      if (attached && chunk.adMesh) this.scene.add(chunk.adMesh);
+    }
+  }
+
   dispose() {
     for (const chunk of this.chunks.values()) chunk.dispose();
     this.chunks.clear();

@@ -1017,6 +1017,7 @@ export class Game {
     this.world.configureChunkDecals(chunk);
     chunk.buildMesh((wx, wy, wz) => this.world.getBlock(wx, wy, wz), this.world.material, this.world.waterMaterial);
     this.world.chunks.set(key, chunk);
+    this.world.refreshAdjacentDecals(cx, cz);
     return chunk;
   }
 
@@ -1803,6 +1804,7 @@ export class Game {
         const chunk = this._createChunk(pcx + dx, pcz + dz);
         if (chunk?.mesh) this.scene.add(chunk.mesh);
         if (chunk?.waterMesh) this.scene.add(chunk.waterMesh);
+        if (chunk?.adMesh) this.scene.add(chunk.adMesh);
       }
     }
 
@@ -2555,10 +2557,14 @@ export class Game {
     const edits=msg.editsByDimension||{overworld:msg.edits||[]};
     for(const dim of [Dim.OVERWORLD,Dim.NETHER,Dim.END])this._dimEdits[dim]=SaveManager.arrayToEdits(edits[dim]||[]);
     this.world.edits=this._dimEdits[this.dimension];
-    for (const [, chunk] of this.world.chunks) {
+    // Restore every chunk before any mesh consults neighboring blocks.
+    for (const chunk of this.world.chunks.values()) {
+      chunk._disposeDecals();
       this.world.generateChunkData(chunk);
       this.world.applyEdits(chunk);
       chunk.dirty = true;
+    }
+    for (const chunk of this.world.chunks.values()) {
       if (chunk.mesh) this.scene.remove(chunk.mesh);
       if (chunk.waterMesh) this.scene.remove(chunk.waterMesh);
       chunk.buildMesh((wx,wy,wz)=>this.world.getBlock(wx,wy,wz),this.world.material,this.world.waterMaterial);
