@@ -32,6 +32,7 @@ test('nuke code grants only this connection without detonating or carrying to an
  const caster=await socket(url),victim=await socket(url),outsider=await socket(url);
  t.after(()=>{caster.ws.close();victim.ws.close();outsider.ws.close();});
  caster.send({t:'create',name:'caster'});const a=await caster.wait(m=>m.t==='joined');
+ assert.ok(Number.isFinite(a.serverNow),'joined must carry authoritative server time');
  assert.equal(a.nukeUnlocked,false);assert.equal(a.nukeCooldownUntil,0);
  victim.send({t:'join',room:a.room,name:'victim'});await victim.wait(m=>m.t==='joined');
  outsider.send({t:'create',name:'outsider'});const b=await outsider.wait(m=>m.t==='joined');
@@ -40,7 +41,7 @@ test('nuke code grants only this connection without detonating or carrying to an
  caster.send({t:'sync'});assert.deepEqual((await caster.wait(m=>m.t==='sync')).editsByDimension.overworld,[]);
 
  caster.send({t:'chat',text:'Maydaymayday'});
- assert.deepEqual(await caster.wait(m=>m.t==='nuke_granted'),{t:'nuke_granted'});
+ {const grant=await caster.wait(m=>m.t==='nuke_granted');assert.ok(Number.isFinite(grant.serverNow));assert.equal(grant.nukeCooldownUntil,0);}
  await delay(500);
  assertNoNuke(caster,victim,outsider);
  assert.equal(victim.messages.some(m=>m.t==='nuke_granted'),false);
@@ -49,6 +50,7 @@ test('nuke code grants only this connection without detonating or carrying to an
  caster.send({t:'sync'});victim.send({t:'sync'});outsider.send({t:'sync'});
  for(const client of [caster,victim,outsider]){
    const snapshot=await client.wait(m=>m.t==='sync');
+   assert.ok(Number.isFinite(snapshot.serverNow));
    assert.equal(snapshot.nukeUnlocked,client===caster);
    assert.equal(snapshot.self.hp,20);
    assert.ok(snapshot.boss.hp>0);
@@ -58,7 +60,7 @@ test('nuke code grants only this connection without detonating or carrying to an
 
  // A repeat acknowledgement is idempotent: no detonation or other room-visible effect.
  caster.send({t:'chat',text:'Maydaymayday'});
- assert.deepEqual(await caster.wait(m=>m.t==='nuke_granted'),{t:'nuke_granted'});
+ {const grant=await caster.wait(m=>m.t==='nuke_granted');assert.ok(Number.isFinite(grant.serverNow));assert.equal(grant.nukeCooldownUntil,0);}
  await delay(500);assertNoNuke(caster,victim,outsider);
  victim.send({t:'chat',text:'maydaymayday'});
  await victim.wait(m=>m.t==='chat'&&m.text==='maydaymayday');
@@ -77,14 +79,17 @@ test('nuke code grants only this connection without detonating or carrying to an
  const spawnB=await victim.wait(m=>m.t==='nuke_projectile'&&m.phase==='spawn');
  assert.deepEqual(spawnA,spawnB);assert.equal(spawnA.ownerId,a.id);
  assert.equal(spawnA.dimension,'overworld');assert.ok(Math.abs(spawnA.x)<100);
+ assert.ok(Number.isFinite(spawnA.serverNow));assert.equal(spawnA.cooldownUntil-spawnA.serverNow,300000);
  assert.ok(spawnA.cooldownUntil>Date.now());assert.equal(spawnA.previousNukeAt,undefined);
  caster.send({t:'nuke_throw'});
  assert.match((await caster.wait(m=>m.t==='err')).msg,/冷却/);
  const updateA=await caster.wait(m=>m.t==='nuke_projectile'&&m.phase==='update');
  const updateB=await victim.wait(m=>m.t==='nuke_projectile'&&m.phase==='update');
+ assert.ok(Number.isFinite(updateA.serverNow));
  assert.deepEqual(updateA,updateB);assert.equal(updateA.id,spawnA.id);
  const endA=await caster.wait(m=>m.t==='nuke_projectile'&&m.phase==='end');
  const endB=await victim.wait(m=>m.t==='nuke_projectile'&&m.phase==='end');
+ assert.ok(Number.isFinite(endA.serverNow));
  assert.deepEqual(endA,endB);assert.equal(endA.id,spawnA.id);assert.equal(endA.status,'impact');
  const impactA=await caster.wait(m=>m.t==='nuke'),impactB=await victim.wait(m=>m.t==='nuke');
  assert.deepEqual(impactA,impactB);assert.equal(impactA.casterId,a.id);

@@ -47,7 +47,7 @@ test('nuke grant, equipment, input guards, cooldown and session reset in browser
   await page.locator('#gameCanvas').dispatchEvent('mousedown',{button:2});
   assert.equal(await page.evaluate(()=>sent.filter(m=>m.t==='nuke_throw').length),1,'dialog blocks throwing');
   await page.evaluate(()=>__game.adminPanel.setOpen(false));
-  await page.evaluate(()=>{__game._closeChat();__game.net._onMsg({t:'nuke_projectile',phase:'spawn',id:'p',ownerId:'other',dimension:'overworld',x:7,y:21,z:4,cooldownUntil:Date.now()+300000});});
+  await page.evaluate(()=>{__game._closeChat();__game.net._onMsg({t:'nuke_projectile',phase:'spawn',id:'p',ownerId:'other',dimension:'overworld',x:7,y:21,z:4,serverNow:Date.now(),cooldownUntil:Date.now()+300000});});
   await page.waitForFunction(()=>document.getElementById('nukeCooldown').textContent.includes('冷却'));
   await page.locator('#gameCanvas').dispatchEvent('mousedown',{button:2});
   assert.equal(await page.evaluate(()=>sent.filter(m=>m.t==='nuke_throw').length),1);
@@ -62,6 +62,35 @@ test('nuke grant, equipment, input guards, cooldown and session reset in browser
   assert.equal(await page.evaluate(()=>__game.nukeEquipped),false);
   assert.equal(await page.locator('#nukeEquip').isVisible(),false);
   await page.evaluate(()=>__game.net._onMsg({t:'nuke_granted'}));
+  const clockCases=await page.evaluate(()=>{
+    const g=__game,wall=Date.now,mono=performance.now.bind(performance),results=[];
+    let monotonic=mono();
+    Object.defineProperty(performance,'now',{configurable:true,value:()=>monotonic});
+    try {
+      for(const skew of [-600000,600000]) {
+        Date.now=()=>1000000+skew;
+        g.net._onMsg({t:'joined',room:'CLOCK',id:'clock',serverNow:1000000,nukeUnlocked:true,nukeCooldownUntil:1120000});
+        results.push(document.getElementById('nukeCooldown').textContent);
+        g.net._onMsg({t:'sync',serverNow:1090000,nukeUnlocked:true,nukeCooldownUntil:1120000});
+        results.push(document.getElementById('nukeCooldown').textContent);
+        g.net._onMsg({t:'nuke_granted',serverNow:1100000,nukeCooldownUntil:1120000});
+        results.push(document.getElementById('nukeCooldown').textContent);
+        g.net._onMsg({t:'nuke_projectile',phase:'spawn',id:'clock',dimension:'overworld',x:0,y:20,z:0,serverNow:2000000,cooldownUntil:2300000});
+        g.nukeEquipped=true;g._updateNukeHUD();
+        results.push(document.getElementById('nukeCooldown').textContent);
+        const count=()=>sent.filter(m=>m.t==='nuke_throw').length;
+        let before=count();g._secondaryAction();results.push(count()-before);
+        Date.now=()=>1000000-skew*100; // Wall-clock change after receipt must not affect duration.
+        monotonic+=300001;g._updateNukeHUD();
+        results.push(document.getElementById('nukeThrow').disabled);
+        before=count();g._secondaryAction();results.push(count()-before);
+        g.net._onMsg({t:'nuke_projectile',phase:'end',id:'clock',serverNow:2300001,cooldownUntil:0,status:'failed'});
+        results.push(document.getElementById('nukeCooldown').textContent);
+      }
+    } finally {Date.now=wall;delete performance.now;}
+    return results;
+  });
+  assert.deepEqual(clockCases,Array(2).fill(['房间冷却 2:00','房间冷却 0:30','房间冷却 0:20','房间冷却 5:00',0,false,1,'可投掷 · 右键']).flat());
   await page.evaluate(()=>__game.net._emit('close'));
   assert.equal(await page.locator('#nukeEquip').isVisible(),false);
   assert.equal(await page.evaluate(()=>__game.nukeUnlocked),false);

@@ -789,6 +789,7 @@ export class Game {
     this.nukeUnlocked = false;
     this.nukeEquipped = false;
     this.nukeCooldownUntil = 0;
+    this._nukeCooldownDeadline = 0;
     this._hostWaiting = false; // 已建房、仍在大厅等待
     this._pendingJoinMsg = null;
     this._roomPollTimer = null;
@@ -1230,17 +1231,25 @@ export class Game {
     this._updateNukeHUD();
   }
   _resetNuke() {
-    this.nukeUnlocked=false;this.nukeEquipped=false;this.nukeCooldownUntil=0;
+    this.nukeUnlocked=false;this.nukeEquipped=false;this.nukeCooldownUntil=0;this._nukeCooldownDeadline=0;
     this.nukeVisual?.clear();this._updateNukeHUD();
   }
   _applyNukeState(msg) {
     this.nukeUnlocked=msg.nukeUnlocked===true;
     if(!this.nukeUnlocked)this.nukeEquipped=false;
-    this.nukeCooldownUntil=Number.isFinite(msg.nukeCooldownUntil)?msg.nukeCooldownUntil:0;
+    this._setNukeCooldown(msg.nukeCooldownUntil,msg.serverNow);
     this.nukeVisual?.clear();
     if(msg.nukeProjectile)this.nukeVisual?.receive({...msg.nukeProjectile,phase:'spawn'});
     this._updateNukeHUD();
   }
+  _setNukeCooldown(until,serverNow) {
+    this.nukeCooldownUntil=Number.isFinite(until)?until:0;
+    // Never gate intent against an uncalibrated wall clock. Legacy/missing
+    // timestamps fail open locally; the server still adjudicates every throw.
+    const remaining=Number.isFinite(serverNow)?Math.max(0,this.nukeCooldownUntil-serverNow):0;
+    this._nukeCooldownDeadline=performance.now()+remaining;
+  }
+  _nukeRemaining() {return Math.max(0,(this._nukeCooldownDeadline||0)-performance.now());}
   _updateNukeHUD() {
     const hud=document.getElementById('nukeHud');if(!hud)return;
     hud.hidden=!(this._online&&this.nukeUnlocked&&this._nukeHudShown&&!this._dead);
@@ -1248,7 +1257,7 @@ export class Game {
     const equip=document.getElementById('nukeEquip');
     equip.setAttribute('aria-pressed',String(this.nukeEquipped));
     equip.textContent=this.nukeEquipped?'核弹 ∞ · 已装备 [N]':'核弹 ∞ · 装备 [N]';
-    const remaining=Math.max(0,Math.ceil((this.nukeCooldownUntil-Date.now())/1000));
+    const remaining=Math.max(0,Math.ceil(this._nukeRemaining()/1000));
     document.getElementById('nukeCooldown').textContent=remaining?'房间冷却 '+Math.floor(remaining/60)+':'+String(remaining%60).padStart(2,'0'):'可投掷 · 右键';
     const button=document.getElementById('nukeThrow');button.hidden=!this.isMobile||!this.nukeEquipped;
     button.disabled=remaining>0||this._chatOpen;
@@ -1497,7 +1506,7 @@ export class Game {
     if(this._dead||this._chatOpen||this.adminPanel?.open||/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName)||document.activeElement?.isContentEditable)return;
     if(this.nukeEquipped){
       if(!this._online||!this.nukeUnlocked||!this._controlsActive()||this.player.hp<=0||performance.now()<(this.player.lockedUntil||0))return;
-      if(this.nukeCooldownUntil>Date.now()){this._showSaveToast('核弹冷却中');return;}
+      if(this._nukeRemaining()>0){this._showSaveToast('核弹冷却中');return;}
       this.net._send({t:'nuke_throw'});return;
     }
     if (this.player.hp <= 0 || performance.now() < (this.player.lockedUntil || 0) || this.combat?.armed) return;
@@ -2277,13 +2286,14 @@ export class Game {
   _bindNet() {
     this.net.on('joined', msg => {this._resetNuke();this._applyNukeState(msg);});
     this.net.on('sync', msg => this._applyNukeState(msg));
-    this.net.on('nuke_granted', () => {
+    this.net.on('nuke_granted', msg => {
+      if(Number.isFinite(msg.nukeCooldownUntil))this._setNukeCooldown(msg.nukeCooldownUntil,msg.serverNow);
       this.nukeUnlocked=true;this._updateNukeHUD();
       this.roomChat?.append('系统','已领取无限核弹；点击核弹或按 N 装备，右键投掷');
       this._showSaveToast('已领取无限核弹 · N 装备');
     });
     this.net.on('nuke_projectile', msg => {
-      if(Number.isFinite(msg.cooldownUntil))this.nukeCooldownUntil=msg.cooldownUntil;
+      if(Number.isFinite(msg.cooldownUntil))this._setNukeCooldown(msg.cooldownUntil,msg.serverNow);
       this.nukeVisual?.receive(msg);this._updateNukeHUD();
     });
     this.net.on('combat', msg => {
@@ -2772,7 +2782,7 @@ export class Game {
           mobs: snap.mobs,
           boss: snap.boss,dragonKilled:snap.dragonKilled,
           self: snap.self,
-          nukeUnlocked:snap.nukeUnlocked,nukeCooldownUntil:snap.nukeCooldownUntil,nukeProjectile:snap.nukeProjectile,
+          serverNow:snap.serverNow,nukeUnlocked:snap.nukeUnlocked,nukeCooldownUntil:snap.nukeCooldownUntil,nukeProjectile:snap.nukeProjectile,
           players: snap.players,
           id: this.net.id,
           color: this.net.color,

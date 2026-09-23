@@ -275,6 +275,7 @@ class Room {
   snapshotFor(ws) {
     return {
       t: 'sync',
+      serverNow: Date.now(),
       nukeUnlocked: !!this.peers.get(ws)?.nukeUnlocked,
       nukeCooldownUntil: nukeCooldownUntil(this),
       nukeProjectile: publicNukeProjectile(this.nukeProjectile),
@@ -468,6 +469,7 @@ function joinRoom(ws, room, name) {
 
   send(ws, {
     t: 'joined',
+    serverNow: Date.now(),
     nukeUnlocked: !!peer.nukeUnlocked,
     nukeCooldownUntil: nukeCooldownUntil(room),
     nukeProjectile: publicNukeProjectile(room.nukeProjectile),
@@ -837,7 +839,7 @@ wss.on('connection', (ws) => {
       peer.lastChatAt=now;
       if(isNukeCode(msg.text)){
         peer.nukeUnlocked=true;
-        send(ws,{t:'nuke_granted'});
+        send(ws,{t:'nuke_granted',serverNow:now,nukeCooldownUntil:nukeCooldownUntil(room)});
         return;
       }
       room.broadcast({t:'chat',by:peer.name,text});return;
@@ -851,7 +853,7 @@ wss.on('connection', (ws) => {
           (room.nukeProjectile||nukeCooldownUntil(room)>now)?'核弹冷却中':'无法投掷核弹';
         send(ws,{t:'err',msg});return;
       }
-      room.broadcast({t:'nuke_projectile',phase:'spawn',...publicNukeProjectile(projectile),cooldownUntil:nukeCooldownUntil(room)});
+      room.broadcast({t:'nuke_projectile',phase:'spawn',serverNow:now,...publicNukeProjectile(projectile),cooldownUntil:nukeCooldownUntil(room)});
       return;
     }
     if (msg.t === 'terrain_reset') {
@@ -1068,7 +1070,7 @@ setInterval(() => {
     const result=stepNukeProjectile(room,projectile,.05,now);
     if (!result) continue;
     room.broadcast({t:'nuke_projectile',phase:result.status==='flying'?'update':'end',
-      ...publicNukeProjectile(projectile),status:result.status,cooldownUntil:nukeCooldownUntil(room)});
+      ...publicNukeProjectile(projectile),serverNow:now,status:result.status,cooldownUntil:nukeCooldownUntil(room)});
     if (result.status==='impact') {
       room.broadcast({t:'nuke',...result.event});
       room.broadcast({t:'mobs',list:room.mobsArray()});
