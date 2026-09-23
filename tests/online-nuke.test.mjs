@@ -1,5 +1,6 @@
 import test from 'node:test';import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';import {mkdtemp,rm} from 'node:fs/promises';import {tmpdir} from 'node:os';import net from 'node:net';
+import {NetClient} from '../js/net.js';
 const delay=ms=>new Promise(r=>setTimeout(r,ms));
 async function socket(url){
  const ws=new WebSocket(url),messages=[];
@@ -9,11 +10,18 @@ async function socket(url){
    const end=Date.now()+ms;while(Date.now()<end){const i=messages.findIndex(predicate);if(i>=0)return messages.splice(i,1)[0];await delay(15);}throw new Error('timeout '+JSON.stringify(messages.slice(-5)));
  }};
 }
-test('two rooms: authoritative nuke and reset are scoped and persistent', {timeout:30000},async t=>{
+function assertNoNuke(...clients){for(const client of clients)assert.equal(client.messages.some(m=>m.t==='nuke'),false);}
+test('network client delivers private nuke grant event',()=>{
+ const client=new NetClient();let received;
+ client.on('nuke_granted',message=>received=message);
+ client._onMsg({t:'nuke_granted'});
+ assert.deepEqual(received,{t:'nuke_granted'});
+});
+test('nuke code grants only this connection without detonating or carrying to another room', {timeout:30000},async t=>{
  const reservation=net.createServer();await new Promise(r=>reservation.listen(0,'127.0.0.1',r));
  const port=reservation.address().port;await new Promise(r=>reservation.close(r));
  const dir=await mkdtemp(tmpdir()+'/mc-room-nuke-');
- let child=spawn(process.execPath,['server/server.js'],{cwd:new URL('../',import.meta.url),env:{...process.env,PORT:String(port),HOST:'127.0.0.1',MC_DATA_DIR:dir,MC_OWNER_KEY:'test-only-owner'}});
+ const child=spawn(process.execPath,['server/server.js'],{cwd:new URL('../',import.meta.url),env:{...process.env,PORT:String(port),HOST:'127.0.0.1',MC_DATA_DIR:dir,MC_OWNER_KEY:'test-only-owner'}});
  let logs='';child.stdout.on('data',b=>logs+=b);child.stderr.on('data',b=>logs+=b);
  t.after(async()=>{if(child.exitCode===null){child.kill('SIGTERM');await new Promise(r=>child.once('exit',r));}await rm(dir,{recursive:true,force:true});});
  for(let i=0;i<100&&!logs.includes('http://');i++)await delay(25);assert.match(logs,/http:\/\//,logs);
@@ -21,24 +29,46 @@ test('two rooms: authoritative nuke and reset are scoped and persistent', {timeo
  const caster=await socket(url),victim=await socket(url),outsider=await socket(url);
  t.after(()=>{caster.ws.close();victim.ws.close();outsider.ws.close();});
  caster.send({t:'create',name:'caster'});const a=await caster.wait(m=>m.t==='joined');
- victim.send({t:'join',room:a.room,name:'victim'});const b=await victim.wait(m=>m.t==='joined');
- outsider.send({t:'create',name:'outsider'});const c=await outsider.wait(m=>m.t==='joined');
+ victim.send({t:'join',room:a.room,name:'victim'});await victim.wait(m=>m.t==='joined');
+ outsider.send({t:'create',name:'outsider'});const b=await outsider.wait(m=>m.t==='joined');
  caster.send({t:'play'});victim.send({t:'play'});outsider.send({t:'play'});
  caster.send({t:'block',x:4294967296,y:19,z:0,b:0});
  caster.send({t:'sync'});assert.deepEqual((await caster.wait(m=>m.t==='sync')).editsByDimension.overworld,[]);
 
- victim.send({t:'move',x:b.self.x,y:b.self.y,z:b.self.z,dimension:'nether',yaw:0,pitch:0});
  caster.send({t:'chat',text:'Maydaymayday'});
- const event=await victim.wait(m=>m.t==='nuke');assert.equal(event.casterId,a.id);
+ assert.deepEqual(await caster.wait(m=>m.t==='nuke_granted'),{t:'nuke_granted'});
+ await delay(500);
+ assertNoNuke(caster,victim,outsider);
+ assert.equal(victim.messages.some(m=>m.t==='nuke_granted'),false);
+ assert.equal(outsider.messages.some(m=>m.t==='nuke_granted'),false);
+ assert.equal(victim.messages.some(m=>m.t==='chat'&&m.text==='Maydaymayday'),false);
  caster.send({t:'sync'});victim.send({t:'sync'});outsider.send({t:'sync'});
- const afterA=await caster.wait(m=>m.t==='sync'),afterB=await victim.wait(m=>m.t==='sync'),afterC=await outsider.wait(m=>m.t==='sync');
- assert.equal(afterA.self.hp,20);assert.equal(afterB.self.hp,0);assert.equal(afterC.self.hp,20);
- assert.equal(afterA.boss.hp,0);assert.ok(afterA.boss.respawnAt>Date.now());
- assert.equal(afterA.dragonKilled,true);
- assert.ok(afterA.editsByDimension.overworld.length>0);assert.deepEqual(afterA.editsByDimension.nether,[]);
- victim.send({t:'terrain_reset'});await delay(200);victim.send({t:'sync'});
- assert.ok((await victim.wait(m=>m.t==='sync')).editsByDimension.overworld.length>0);
- caster.send({t:'terrain_reset'});await caster.wait(m=>m.t==='terrain_reset');
- caster.send({t:'sync'});assert.deepEqual((await caster.wait(m=>m.t==='sync')).editsByDimension.overworld,[]);
+ for(const client of [caster,victim,outsider]){
+   const snapshot=await client.wait(m=>m.t==='sync');
+   assert.equal(snapshot.self.hp,20);
+   assert.ok(snapshot.boss.hp>0);
+   assert.deepEqual(snapshot.editsByDimension.overworld,[]);
+   assert.deepEqual(snapshot.editsByDimension.nether,[]);
+ }
+
+ // A repeat acknowledgement is idempotent: no detonation or other room-visible effect.
+ caster.send({t:'chat',text:'Maydaymayday'});
+ assert.deepEqual(await caster.wait(m=>m.t==='nuke_granted'),{t:'nuke_granted'});
+ await delay(500);assertNoNuke(caster,victim,outsider);
+ victim.send({t:'chat',text:'maydaymayday'});
+ await victim.wait(m=>m.t==='chat'&&m.text==='maydaymayday');
+ assert.equal(victim.messages.some(m=>m.t==='nuke_granted'),false);
+
+ const rejoined=await socket(url);t.after(()=>rejoined.ws.close());
+ rejoined.send({t:'join',room:a.room,name:'caster'});await rejoined.wait(m=>m.t==='joined');
+ rejoined.send({t:'play'});rejoined.send({t:'nuke_throw',x:0,y:19,z:0});
+ await delay(500);assertNoNuke(rejoined,victim);
+ rejoined.send({t:'sync'});assert.deepEqual((await rejoined.wait(m=>m.t==='sync')).editsByDimension.overworld,[]);
+
+ caster.send({t:'join',room:b.room,name:'caster'});await caster.wait(m=>m.t==='joined');
+ caster.send({t:'play'});caster.send({t:'nuke_throw',x:0,y:19,z:0});
+ await delay(500);assertNoNuke(caster,outsider);
+ caster.send({t:'sync'});const afterB=await caster.wait(m=>m.t==='sync');
+ assert.equal(afterB.self.hp,20);assert.deepEqual(afterB.editsByDimension.overworld,[]);
  assert.doesNotMatch(logs,/TypeError|ReferenceError|SyntaxError/);
 });

@@ -21,7 +21,6 @@ async function main() {
 const { RoomBoss, CollisionWorld } = await import('./room-boss.mjs');
 const { RoomTerrain } = await import('./room-terrain.mjs');
 const { isNukeCode, sanitizeChat } = await import('./room-chat.mjs');
-const { resolveNuke } = await import('./room-nuke.mjs');
 const { resetRoomTerrain } = await import('./room-authority.mjs');
 const { isSolid } = await import('../js/voxel.js');
 const { getFoodHeal } = await import('../js/items.js');
@@ -400,6 +399,7 @@ function leaveRoom(ws) {
   if (!peer || !peer.room) return;
   const room = peer.room;
   const wasHost = !!peer.isHost;
+  peer.nukeUnlocked = false;
   room.peers.delete(ws);
   room.broadcast({ t: 'bye', id: peer.id });
   peer.room = null;
@@ -445,7 +445,7 @@ function joinRoom(ws, room, name) {
     color,
     ...room.collision.spawn(), yaw: 0, pitch: -0.1,
     hp:20, active:false, invuln:0, dimension:'overworld', lastBossHit:-Infinity,
-    room, lastMove: 0, isHost, lockedUntil: 0,
+    room, lastMove: 0, isHost, lockedUntil: 0, nukeUnlocked: false,
   };
   if (isHost) {room.hostId = id;room.hostName=peer.name;}
   combat.init(peer);
@@ -822,13 +822,8 @@ wss.on('connection', (ws) => {
       if(!text||!peer.active||peer.hp<=0||now-(peer.lastChatAt||0)<500)return;
       peer.lastChatAt=now;
       if(isNukeCode(msg.text)){
-        const event=resolveNuke(room,peer,now);
-        if(!event){send(ws,{t:'err',msg:'核弹冷却中或地形改动容量不足'});return;}
-        room.broadcast({t:'nuke',...event});
-        room.broadcast({t:'mobs',list:[]});
-        room.broadcast({t:'boss',boss:room.boss.snapshot()});
-        for(const victim of room.peers.values())if(victim!==peer)
-          room.broadcast({t:'combat',...combat.state(victim),cause:'nuke'});
+        peer.nukeUnlocked=true;
+        send(ws,{t:'nuke_granted'});
         return;
       }
       room.broadcast({t:'chat',by:peer.name,text});return;
