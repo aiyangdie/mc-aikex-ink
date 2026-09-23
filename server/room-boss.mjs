@@ -33,18 +33,32 @@ export class RoomBoss {
   constructor(world,saved={x:5.4,y:19,z:5.5}) {
     this.world=world;
     this.position={x:saved.x,y:saved.y,z:saved.z};
+    this.spawnPosition={...(saved.spawnPosition || this.position)};
+    this.respawnAt=Number.isFinite(saved.respawnAt)?saved.respawnAt:
+      saved.hp===0?Date.now()+60_000:null;
     this.combat=new BossCombat(saved.hp);
     this.yaw=saved.yaw||0;
     this.attackId=0;
     this.targetId=null;
   }
   get hp(){return this.combat.hp;}
+  kill(now=Date.now()){
+    if(this.respawnAt!==null)return false;
+    this.combat.takeDamage(this.hp);
+    if(!this.combat.dead)return false;
+    this.respawnAt=now+60_000;return true;
+  }
+  maybeRespawn(now=Date.now()){
+    if(!this.combat.dead||this.respawnAt===null||now<this.respawnAt)return false;
+    this.combat=new BossCombat();this.position={...this.spawnPosition};
+    this.respawnAt=null;this.targetId=null;this.attackId=0;return true;
+  }
   eligible(p){return p.active&&p.hp>0&&p.dimension==='overworld';}
   hit(peer,now=Date.now()) {
     if(this.combat.dead||!this.eligible(peer)||now-(peer.lastBossHit??-Infinity)<350)return false;
     if(Math.hypot(peer.x-this.position.x,peer.y-this.position.y,peer.z-this.position.z)>7)return false;
     if(!hasLineOfSight(this.world,peer,this.position))return false;
-    peer.lastBossHit=now;this.combat.takeDamage(5);return true;
+    peer.lastBossHit=now;this.combat.takeDamage(5);if(this.combat.dead)this.kill(now);return true;
   }
   rayDistance(peer,msg) {
     const d=msg.direction;
@@ -89,5 +103,6 @@ export class RoomBoss {
     return events;
   }
   snapshot(){return {id:'mist-boss',kind:'mist-boss',...this.position,yaw:this.yaw,hp:this.hp,maxHp:1500,
-    state:this.combat.state,attackId:this.attackId,attackTime:this.combat.attackTime,targetId:this.targetId};}
+    state:this.combat.state,attackId:this.attackId,attackTime:this.combat.attackTime,targetId:this.targetId,
+    spawnPosition:this.spawnPosition,respawnAt:this.respawnAt};}
 }

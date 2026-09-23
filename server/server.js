@@ -19,6 +19,10 @@ const { URL } = require('url');
 
 async function main() {
 const { RoomBoss, CollisionWorld } = await import('./room-boss.mjs');
+const { RoomTerrain } = await import('./room-terrain.mjs');
+const { isNukeCode, sanitizeChat } = await import('./room-chat.mjs');
+const { resolveNuke } = await import('./room-nuke.mjs');
+const { resetRoomTerrain } = await import('./room-authority.mjs');
 const { isSolid } = await import('../js/voxel.js');
 const { getFoodHeal } = await import('../js/items.js');
 const { buildMobDrops } = await import('../js/loot.js');
@@ -167,8 +171,12 @@ class Room {
     this.seed = SEED;
     this.title = title;
     this.hostName = hostName;
-    this.hostId = null;
-    this.edits = new Map();
+    this.hostId=null;
+    this.terrain = new RoomTerrain(MAX_EDITS);
+    this.edits = this.terrain.getEdits();
+    this.terrainRevision = 0;
+    this.lastNukeAt=0;
+    this.dragonKilled=false;
     this.peers = new Map();
     this.mobs = new Map();
     this.spells = new Spells();
@@ -226,29 +234,12 @@ class Room {
     schedulePersist();
   }
 
-  editsArray() {
-    const arr = [];
-    for (const [k, t] of this.edits) {
-      const p = k.split(',');
-      if (p.length !== 3) continue;
-      arr.push(+p[0], +p[1], +p[2], t | 0);
-    }
-    return arr;
-  }
-
-  applyEditsArray(arr) {
-    if (!Array.isArray(arr)) return;
-    for (let i = 0; i + 3 < arr.length; i += 4) {
-      if (this.edits.size >= MAX_EDITS) break;
-      this.edits.set(`${arr[i] | 0},${arr[i + 1] | 0},${arr[i + 2] | 0}`, arr[i + 3] | 0);
-    }
-  }
-
-  setBlock(x, y, z, b) {
-    if (this.edits.size >= MAX_EDITS && !this.edits.has(`${x},${y},${z}`)) return false;
-    this.edits.set(`${x | 0},${y | 0},${z | 0}`, b | 0);
-    this.touch();
-    return true;
+  editsArray(dim='overworld') { return this.terrain.editsArray(dim); }
+  applyEditsArray(arr,dim='overworld') { this.terrain.applyEditsArray(arr,dim); }
+  setBlock(x,y,z,b,dim='overworld') {
+    if(!this.terrain.setBlock(x,y,z,b,dim))return false;
+    this.terrainRevision++;
+    this.touch();return true;
   }
 
   playersList(exceptWs = null) {
@@ -286,6 +277,7 @@ class Room {
       title: this.title,
       seed: this.seed,
       edits: this.editsArray(),
+      hostId:this.hostId||null,editsByDimension:this.terrain.toJSON(),terrainRevision:this.terrainRevision,lastNukeAt:this.lastNukeAt,dragonKilled:this.dragonKilled,
       players: this.playersList(ws),
       playersCount: this.peers.size,
       mobs: this.mobsArray(),
@@ -313,7 +305,7 @@ class Room {
       players: this.peers.size,
       max: MAX_PLAYERS,
       names: this.playerNames(),
-      edits: this.edits.size,
+      edits: this.terrain.size,
       full: this.peers.size >= MAX_PLAYERS,
       createdAt: this.createdAt,
       ageSec: Math.floor((Date.now() - this.createdAt) / 1000),
@@ -327,7 +319,7 @@ class Room {
       hostName: this.hostName,
       boss: this.boss.snapshot(),
       seed: this.seed,
-      edits: this.editsArray(),
+      edits: this.editsArray(),editsByDimension:this.terrain.toJSON(),terrainRevision:this.terrainRevision,lastNukeAt:this.lastNukeAt,dragonKilled:this.dragonKilled,
       createdAt: this.createdAt,
       lastActive: this.lastActive,
     };
@@ -338,7 +330,11 @@ class Room {
     room.seed = row.seed | 0 || SEED;
     room.createdAt = row.createdAt || Date.now();
     room.lastActive = row.lastActive || Date.now();
-    room.applyEditsArray(row.edits);
+    room.terrain=RoomTerrain.fromPersist(row,MAX_EDITS);
+    room.edits=room.terrain.getEdits();
+    room.terrainRevision=Number.isSafeInteger(row.terrainRevision)?row.terrainRevision:0;
+    room.lastNukeAt=Number.isFinite(row.lastNukeAt)?row.lastNukeAt:0;
+    room.dragonKilled=row.dragonKilled===true;
     room.collision = new CollisionWorld(room.seed, room.edits);
     room.boss = new RoomBoss(room.collision, row.boss || undefined);
     room.emptyAt = Date.now(); // 重启后无人，走宽限
@@ -408,6 +404,7 @@ function leaveRoom(ws) {
   room.broadcast({ t: 'bye', id: peer.id });
   peer.room = null;
   if (room.peers.size === 0) {
+    room.hostId=null;
     room.emptyAt = Date.now();
     console.log(`[mc-ws] room ${room.code} empty, grace ${EMPTY_GRACE_MS / 1000}s`);
     schedulePersist();
@@ -419,6 +416,7 @@ function leaveRoom(ws) {
       next.isHost = true;
       room.broadcast({ t: 'peer', ...combat.state(next), id: next.id, name: next.name, color: next.color, host: true });
     }
+    room.broadcast({t:'host',hostId:room.hostId});
     schedulePersist();
   }
 }
@@ -449,11 +447,12 @@ function joinRoom(ws, room, name) {
     hp:20, active:false, invuln:0, dimension:'overworld', lastBossHit:-Infinity,
     room, lastMove: 0, isHost, lockedUntil: 0,
   };
-  if (isHost) room.hostId = id;
+  if (isHost) {room.hostId = id;room.hostName=peer.name;}
   combat.init(peer);
   ws._peer = peer;
   room.peers.set(ws, peer);
   room.touch();
+  room.broadcast({t:'host',hostId:room.hostId});
   console.log(`[mc-ws] join ${room.code} as ${peer.name} (${room.peers.size}/${MAX_PLAYERS})`);
 
   send(ws, {
@@ -469,6 +468,7 @@ function joinRoom(ws, room, name) {
     seed: room.seed,
     color,
     edits: room.editsArray(),
+    hostId:room.hostId||null,editsByDimension:room.terrain.toJSON(),terrainRevision:room.terrainRevision,lastNukeAt:room.lastNukeAt,dragonKilled:room.dragonKilled,
     players: room.playersList(ws),
     mobs: room.mobsArray(),
     host: isHost,
@@ -817,6 +817,27 @@ wss.on('connection', (ws) => {
     }
     const room = peer.room;
 
+    if (msg.t === 'chat') {
+      const now=Date.now(),text=sanitizeChat(msg.text);
+      if(!text||!peer.active||peer.hp<=0||now-(peer.lastChatAt||0)<500)return;
+      peer.lastChatAt=now;
+      if(isNukeCode(msg.text)){
+        const event=resolveNuke(room,peer,now);
+        if(!event){send(ws,{t:'err',msg:'核弹冷却中或地形改动容量不足'});return;}
+        room.broadcast({t:'nuke',...event});
+        room.broadcast({t:'mobs',list:[]});
+        room.broadcast({t:'boss',boss:room.boss.snapshot()});
+        for(const victim of room.peers.values())if(victim!==peer)
+          room.broadcast({t:'combat',...combat.state(victim),cause:'nuke'});
+        return;
+      }
+      room.broadcast({t:'chat',by:peer.name,text});return;
+    }
+    if (msg.t === 'terrain_reset') {
+      if(!resetRoomTerrain(room,peer)){send(ws,{t:'err',msg:'仅房主可重置地形'});return;}
+      room.broadcast({t:'terrain_reset',revision:room.terrainRevision,editsByDimension:room.terrain.toJSON()});
+      return;
+    }
     if (msg.t === 'sync') {
       send(ws, room.snapshotFor(ws));
       return;
@@ -883,7 +904,7 @@ wss.on('connection', (ws) => {
 
       if (!shot) return;
       if (Number.isFinite(bossDistance) && !shot.target && shot.distance >= bossDistance) {
-        room.boss.combat.takeDamage(5); room.touch();
+        room.boss.combat.takeDamage(5); if(room.boss.combat.dead)room.boss.kill(Date.now()); room.touch();
         room.broadcast({t:'boss',boss:room.boss.snapshot()});
       }
       room.broadcast({ t: 'shot', by: peer.id, dimension: peer.dimension,
@@ -934,13 +955,16 @@ wss.on('connection', (ws) => {
     }
 
     if (msg.t === 'block') {
+      if(![msg.x,msg.y,msg.z,msg.b].every(Number.isSafeInteger)||
+         Math.abs(msg.x)>4096||Math.abs(msg.z)>4096||msg.y<0||msg.y>=48||msg.b<0||msg.b>255)return;
       const x = msg.x | 0, y = msg.y | 0, z = msg.z | 0, b = msg.b | 0;
+      const dimension=peer.dimension;
       if (y < 0 || y >= 48) return;
-      if (!room.setBlock(x, y, z, b)) {
+      if (!room.setBlock(x, y, z, b,dimension)) {
         send(ws, { t: 'err', msg: '改动过多，无法继续同步' });
         return;
       }
-      room.broadcast({ t: 'block', x, y, z, b, by: peer.id }, ws);
+      room.broadcast({ t: 'block', x, y, z, b, dimension, revision:room.terrainRevision,by: peer.id }, ws);
       return;
     }
 
@@ -1020,6 +1044,7 @@ setInterval(() => {
   bossTick++;
   for (const room of rooms.values()) {
     if (!room.peers.size) continue;
+    if(room.boss.maybeRespawn(Date.now())) {room.touch();room.broadcast({t:'boss',boss:room.boss.snapshot()});}
     const events=room.boss.tick(.05,[...room.peers.values()]);
     for (const event of events) {
       for (const [ws,peer] of room.peers) if (peer.id===event.id) {

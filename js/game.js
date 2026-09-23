@@ -23,6 +23,9 @@ import { buildStructure } from './structures.js?v=groundfix9';
 import { summarizeDrops, buildMobDrops } from './loot.js?v=groundfix9';
 import { apiUrl } from './config.js?v=groundfix9';
 import { MistBoss } from './mist-boss.js';
+import { shouldReviveSoloBoss,scheduleSoloRespawn } from './boss-respawn.js';
+import { RoomChat } from './room-chat.js';
+import { mouseLookDelta } from './mouse-look.js';
 import { findStandY } from './boss-navigation.js';
 
 /* ============================================
@@ -125,10 +128,10 @@ class Player {
     // 根据输入计算目标速度
     const moveDir = new THREE.Vector3(0, 0, 0);
     if (!adminLocked) {
-      if (this.keys['KeyW'] || this.keys['ArrowUp']) moveDir.add(forward);
-      if (this.keys['KeyS'] || this.keys['ArrowDown']) moveDir.sub(forward);
-      if (this.keys['KeyA'] || this.keys['ArrowLeft']) moveDir.sub(right);
-      if (this.keys['KeyD'] || this.keys['ArrowRight']) moveDir.add(right);
+    if (this.keys['KeyW'] || this.keys['ArrowUp']) moveDir.add(forward);
+    if (this.keys['KeyS'] || this.keys['ArrowDown']) moveDir.sub(forward);
+    if (this.keys['KeyA'] || this.keys['ArrowLeft']) moveDir.sub(right);
+    if (this.keys['KeyD'] || this.keys['ArrowRight']) moveDir.add(right);
     }
 
     if (moveDir.lengthSq() > 0) {
@@ -779,6 +782,9 @@ export class Game {
     this.remotes = null;
     this._netApplying = false;
     this._online = false;
+    this._terrainRevision = 0;
+    this._roomHostId = null;
+    this._chatOpen = false;
     this._hostWaiting = false; // 已建房、仍在大厅等待
     this._pendingJoinMsg = null;
     this._roomPollTimer = null;
@@ -816,6 +822,7 @@ export class Game {
     this.remotes = new RemotePlayers(this.scene, THREE);
     this._bindNet();
     this._initOnlineUI();
+    this.roomChat=new RoomChat({onSend:text=>this.net.sendChat(text),onReset:()=>this._confirmTerrainReset(),onClose:()=>{this._chatOpen=false;this._lastMousePoint=null;}});
 
     this.adminPanel = new AdminPanel(this);
     this.adminPanel.tryAutoLogin();
@@ -831,7 +838,7 @@ export class Game {
     // 读档：先灌差分，再生成区块（背景预览即是存档世界）
     this._saveData = SaveManager.load();
     if (this._saveData) {
-      this._mistBossState = this._saveData.mistBoss || null;
+      this._mistBossState = scheduleSoloRespawn(this._saveData.mistBoss || null);
       this.profile = { ...this.profile, ...(this._saveData.profile || {}) };
       this.stats = { ...this.stats, ...(this._saveData.stats || {}) };
       this.world.edits = SaveManager.arrayToEdits(this._saveData.edits);
@@ -1180,7 +1187,7 @@ export class Game {
   _pauseFallback() {
     this._fallbackActive = false;
     this._lockPending = false;
-    this._lookDrag = null;
+    this._lastMousePoint = null;
     this.player.keys = {};
     if (this.combat) this.combat.held = false;
     this.ui.pauseScreen.style.display = 'flex';
@@ -1188,12 +1195,30 @@ export class Game {
     this._persist('auto');
   }
 
+  _openChat(){
+    if(!this.roomChat||!this._online||!this.isRunning)return;
+    this._chatOpen=true;this._lastMousePoint=null;this.player.keys={};
+    if(document.pointerLockElement===this.canvas)document.exitPointerLock();
+    this.roomChat.focus();
+  }
+  _closeChat(){this._chatOpen=false;this._lastMousePoint=null;this.roomChat?.close();}
+  _confirmTerrainReset(){
+    if(!this._online||this._roomHostId!==this.net.id)return;
+    this._chatOpen=true;this._lastMousePoint=null;this.player.keys={};
+    if(document.pointerLockElement===this.canvas)document.exitPointerLock();
+    const accepted=window.confirm('将永久清除当前房间所有维度的建设和弹坑，且无法撤销。确认重置地形？');
+    this._chatOpen=false;
+    if(accepted)this.net.sendTerrainReset();
+  }
+
   /** 绑定事件监听 */
   _initEvents() {
     // 键盘事件（桌面端 + 移动端外接键盘通用）
     document.addEventListener('keydown', (e) => {
+      if(this._chatOpen){if(e.code==='Escape'){e.preventDefault();this._closeChat();}return;}
       if (this._dead) return;
       if (/INPUT|TEXTAREA|SELECT/.test(e.target.tagName) || e.target.isContentEditable) return;
+      if(e.code==='KeyT'&&this._online&&this.isRunning){e.preventDefault();this._openChat();return;}
       if (e.code === 'Escape' && this._fallbackActive) { this._pauseFallback(); return; }
       if (!this._controlsActive()) return;
       this.player.keys[e.code] = true;
@@ -1246,37 +1271,12 @@ export class Game {
       this.player.keys[e.code] = false;
     });
 
-    // 鼠标移动（仅桌面端指针锁定后）
-    document.addEventListener('mousemove', (e) => {
-      if (this._dead) return;
-      if (this.isPointerLocked) this.player.onMouseMove(e.movementX, e.movementY);
-      else if (this._fallbackActive && this._lookDrag) {
-        const dx = e.clientX - this._lookDrag.x, dy = e.clientY - this._lookDrag.y;
-        this._lookDrag.distance += Math.abs(dx) + Math.abs(dy);
-        this._lookDrag.x = e.clientX; this._lookDrag.y = e.clientY;
-        this.player.onMouseMove(dx, dy);
-      }
-    });
-
-    // 鼠标：左键攻击/破坏，右键放置（对标我的世界）
-    document.addEventListener('mousedown', (e) => {
-      if (this._dead) return;
-      if (!this._controlsActive() || (!this.isPointerLocked && e.target !== this.canvas)) return;
-      if (this._fallbackActive && e.button === 2) {
-        this._lookDrag = { x: e.clientX, y: e.clientY, distance: 0 }; return;
-      }
-      if (e.button === 0) this._primaryAction();
-      else if (e.button === 2) this._secondaryAction();
-    });
-
-    document.addEventListener('mouseup', (e) => {
-      if (e.button !== 2 || !this._lookDrag) return;
-      const click = this._lookDrag.distance < 4;
-      this._lookDrag = null;
-      if (click && this._fallbackActive && e.target === this.canvas) this._secondaryAction();
-    });
+    // Pointer Lock 优先；受限浏览器回退为画布悬停视角，不需要按住右键。
+    document.addEventListener('mousemove',e=>this._handleMouseMove(e));
+    document.addEventListener('mousedown',e=>this._handleMouseDown(e));
+    this.canvas.addEventListener('mouseleave',()=>{this._lastMousePoint=null;});
     window.addEventListener('blur', () => {
-      this.player.keys = {};
+      this.player.keys = {};this._lastMousePoint=null;
       if (this._fallbackActive) this._pauseFallback();
     });
 
@@ -1306,6 +1306,7 @@ export class Game {
     // ----- 桌面端：指针锁定逻辑 -----
     if (!this.isMobile) {
       document.addEventListener('pointerlockchange', () => {
+        this._lastMousePoint=null;
         this.isPointerLocked = document.pointerLockElement === this.canvas;
         if (this._dead) {
           if (this.isPointerLocked) document.exitPointerLock();
@@ -1317,7 +1318,7 @@ export class Game {
           this._fallbackActive = false;
           this.ui.pauseScreen.style.display = 'none';
           this._showGameUI(true);
-        } else if (this.isRunning) {
+        } else if (this.isRunning && !this._chatOpen) {
           this.player.keys = {};
           this.ui.pauseScreen.style.display = 'flex';
           this._persist('auto'); // 暂停时自动存
@@ -1404,6 +1405,24 @@ export class Game {
   }
 
   /** 左键：优先打怪，否则破坏方块 */
+  _canMouseLook(target){return !this.isMobile&&!this._dead&&!this._chatOpen&&
+    this._controlsActive()&&(this.isPointerLocked||target===this.canvas);}
+  _handleMouseMove(e){
+    if(!this._canMouseLook(e.target)){this._lastMousePoint=null;return;}
+    if(this.isPointerLocked){this.player.onMouseMove(e.movementX,e.movementY);return;}
+    if(this._fallbackActive){
+      const delta=mouseLookDelta(this._lastMousePoint,e);
+      this._lastMousePoint={x:e.clientX,y:e.clientY};
+      if(delta)this.player.onMouseMove(delta.dx,delta.dy);
+    }
+  }
+  _handleMouseDown(e){
+    if(this._dead||this._chatOpen||!this._controlsActive()||
+       (!this.isPointerLocked&&e.target!==this.canvas))return;
+    if(e.button===0)this._primaryAction();
+    else if(e.button===2)this._secondaryAction();
+  }
+
   _primaryAction() {
     if (this.player.hp <= 0 || performance.now() < (this.player.lockedUntil || 0)) return;
     if (this.combat?.armed) { this.combat.shoot(); return; }
@@ -1481,7 +1500,7 @@ export class Game {
     const heal = getFoodHeal(type);
     // 联机也先本地回血，服务端 vitals 再校准
     this.player.hp = Math.min(this.player.maxHp, this.player.hp + heal);
-    if (this._online) this.net._send({ t: 'eat', item: type });
+    if (this._online) this.net._send({t:'eat',item:type});
     this._updateHotbar();
     this._updateHpHud();
     this._showSaveToast(`吃了${getItemName(type)} +${heal}❤`);
@@ -1572,6 +1591,7 @@ export class Game {
       this._mistBossState = robot.toJSON();
       this._dirtySinceSave = true;
       if (robot.dead) {
+        this._mistBossState={...this._mistBossState,respawnAt:Date.now()+60_000};
         this._recordDefeat('boss');
         robot.dispose();
         this._mistBoss = null;
@@ -1758,7 +1778,11 @@ export class Game {
   /** Solo only: keep the new Boss out of the server's unsynchronized mob list. */
   async _ensureMistBoss() {
     if (this._online) { this._syncOnlineBoss(this._netBossState); return; }
-    if (this.dimension !== Dim.OVERWORLD || this._mistBoss || this._mistBossState?.hp === 0) return;
+    if (this.dimension !== Dim.OVERWORLD || this._mistBoss) return;
+    if (this._mistBossState?.hp === 0) {
+      if (!shouldReviveSoloBoss(this._mistBossState)) return;
+      this._mistBossState=null;this._persist('boss-respawn');
+    }
     const p = this.player.position;
     let spawn = this._mistBossState;
     if (!spawn || ![spawn.x,spawn.y,spawn.z].every(Number.isFinite)) {
@@ -1855,7 +1879,7 @@ export class Game {
     this.ui.pauseScreen.style.display = 'none';
     this._showGameUI(false);
     document.getElementById('deathReason').textContent = this._lastDamageBy === 'mist-boss'
-      ? '你被迷雾档案的主人公击败了' : '生命值已耗尽';
+      ? '你被迷雾档案的主人公击败了' : this._lastDamageBy === 'nuke' ? '你被核弹击中了' : '生命值已耗尽';
     document.getElementById('deathScreen').hidden = false;
     if (document.pointerLockElement) document.exitPointerLock();
     this.isPointerLocked = false;
@@ -2195,9 +2219,39 @@ export class Game {
 
   /** 联机事件绑定 */
   _bindNet() {
-    this.net.on('combat', msg => this.combat?.receive(msg));
+    this.net.on('combat', msg => {
+      this.combat?.receive(msg);
+      if(msg.id===this.net.id&&msg.hp<=0&&msg.cause==='nuke'){this._lastDamageBy='nuke';this._showDeathScreen();}
+    });
     this.net.on('shot', msg => this.combat?.trace(msg));
     this.net.on('boss', msg => this._syncOnlineBoss(msg.boss));
+    this.net.on('chat',msg=>this.roomChat?.append(msg.by,msg.text));
+    this.net.on('host',msg=>{this._roomHostId=msg.hostId;this.roomChat?.host(msg.hostId===this.net.id);});
+    this.net.on('terrain_reset',msg=>{
+      if(Number.isSafeInteger(msg.revision)&&msg.revision<=this._terrainRevision)return;
+      this._replaceRoomTerrain(msg);this._showSaveToast('房主已重置地形');
+    });
+    this.net.on('nuke',msg=>{
+      if(Number.isSafeInteger(msg.sequence)&&msg.sequence<=this._terrainRevision)return;
+      this._terrainRevision=msg.sequence;
+      const edits=this._dimEdits[msg.dimension];
+      if(!edits||!Array.isArray(msg.edits))return;
+      this._netApplying=true;
+      for(const [x,y,z,b] of msg.edits){
+        if(![x,y,z,b].every(Number.isFinite))continue;
+        if(msg.dimension===this.dimension)this.world.setBlock(x,y,z,b);
+        else edits.set([x,y,z].join(','),b);
+      }
+      this._netApplying=false;
+      this.animalManager?.syncFromNet([]);
+      if(msg.casterId===this.net.id)this.player.invuln=Math.max(this.player.invuln||0,3);
+      this._dragonKilled=true;
+      if(this._dragon){this._dragon.dispose();this._dragon=null;}
+      const flash=document.getElementById('nukeFlash');
+      if(flash){flash.classList.remove('blast');void flash.offsetWidth;flash.classList.add('blast');}
+      this._showSaveToast('核弹爆炸！地形已改变');
+      this.player.addShake?.(.12);
+    });
     this.net.on('vitals', msg => {
       if (!this._online || this._hostWaiting || !Number.isFinite(msg.hp)) return;
       this.player.hp = Math.max(0,Math.min(20,msg.hp));
@@ -2222,7 +2276,13 @@ export class Game {
     this.net.on('fire', msg => this.combat?.mage.receive(msg));
     this.net.on('blink_fail', msg => this.combat?.mage.onBlinkFail?.(msg));
     this.net.on('block', (msg) => {
-      if (msg.by === this.net.id) return;
+      if(Number.isSafeInteger(msg.revision) && msg.revision<=this._terrainRevision)return;
+      if(Number.isSafeInteger(msg.revision))this._terrainRevision=msg.revision;
+      const dim=msg.dimension||Dim.OVERWORLD;
+      if(msg.by === this.net.id)return;
+      const edits=this._dimEdits[dim];
+      if(!edits)return;
+      if(dim !== this.dimension){edits.set([msg.x,msg.y,msg.z].join(','),msg.b);return;}
       this._netApplying = true;
       this.world.setBlock(msg.x, msg.y, msg.z, msg.b);
       this._netApplying = false;
@@ -2247,6 +2307,7 @@ export class Game {
       this._refreshRoomList();
     });
     this.net.on('close', () => {
+      this.roomChat?.hide();this._chatOpen=false;
       if (this._online || this._hostWaiting) {
         this._clearMistBoss();
         this._netBossState = null;
@@ -2405,6 +2466,24 @@ export class Game {
     this._showSaveToast('已清空附近生物');
   }
 
+  _replaceRoomTerrain(msg){
+    this._terrainRevision=Number.isSafeInteger(msg.revision)?msg.revision:
+      (Number.isSafeInteger(msg.terrainRevision)?msg.terrainRevision:0);
+    const edits=msg.editsByDimension||{overworld:msg.edits||[]};
+    for(const dim of [Dim.OVERWORLD,Dim.NETHER,Dim.END])this._dimEdits[dim]=SaveManager.arrayToEdits(edits[dim]||[]);
+    this.world.edits=this._dimEdits[this.dimension];
+    for (const [, chunk] of this.world.chunks) {
+      this.world.generateChunkData(chunk);
+      this.world.applyEdits(chunk);
+      chunk.dirty = true;
+      if (chunk.mesh) this.scene.remove(chunk.mesh);
+      if (chunk.waterMesh) this.scene.remove(chunk.waterMesh);
+      chunk.buildMesh((wx,wy,wz)=>this.world.getBlock(wx,wy,wz),this.world.material,this.world.waterMaterial);
+      if (chunk.mesh) this.scene.add(chunk.mesh);
+      if (chunk.waterMesh) this.scene.add(chunk.waterMesh);
+    }
+  }
+
   /** 用房间差分覆盖本地世界 */
   _applyRoomState(msg) {
     if (this.combat) {
@@ -2413,21 +2492,11 @@ export class Game {
       this.net._send({t:'mode',mode:this.combat.mode});
     }
     if (msg.self) this.combat?.receive(msg.self);
-    this.world.edits = SaveManager.arrayToEdits(msg.edits || []);
-    for (const [, chunk] of this.world.chunks) {
-      this.world.generateChunkData(chunk);
-      this.world.applyEdits(chunk);
-      chunk.dirty = true;
-      if (chunk.mesh) this.scene.remove(chunk.mesh);
-      if (chunk.waterMesh) this.scene.remove(chunk.waterMesh);
-      chunk.buildMesh(
-        (wx, wy, wz) => this.world.getBlock(wx, wy, wz),
-        this.world.material,
-        this.world.waterMaterial
-      );
-      if (chunk.mesh) this.scene.add(chunk.mesh);
-      if (chunk.waterMesh) this.scene.add(chunk.waterMesh);
-    }
+    this._roomHostId=msg.hostId||null;
+    this._dragonKilled=msg.dragonKilled===true;
+    if(this._dragonKilled&&this._dragon){this._dragon.dispose();this._dragon=null;}
+    this.roomChat?.host(this._roomHostId===this.net.id);
+    this._replaceRoomTerrain(msg);
     this.remotes.clear();
     for (const p of (msg.players || [])) {
       this.remotes.upsert(p);
@@ -2445,6 +2514,7 @@ export class Game {
     this._hostWaiting = false;
     this.net.startHeartbeat();
     this._applyRoomState(msg);
+    this.roomChat?.show();
     this._dead = false;
     document.getElementById('deathScreen').hidden = true;
     if (msg.self) {
@@ -2628,9 +2698,9 @@ export class Game {
         const msg = {
           room: snap.room || this.net.room,
           title: snap.title || this._pendingJoinMsg?.title,
-          edits: snap.edits,
+          edits: snap.edits,editsByDimension:snap.editsByDimension,terrainRevision:snap.terrainRevision,hostId:snap.hostId,
           mobs: snap.mobs,
-          boss: snap.boss,
+          boss: snap.boss,dragonKilled:snap.dragonKilled,
           self: snap.self,
           players: snap.players,
           id: this.net.id,
@@ -3019,6 +3089,8 @@ export class Game {
       if (!this._online && this.player.hp <= 0) this._showDeathScreen();
     }
 
+    if (!this._online && !this._mistBoss && shouldReviveSoloBoss(this._mistBossState) && this.isRunning) this._ensureMistBoss();
+    if (this._online && this._mistBoss) this._mistBoss.update(dt,this.player);
     const entityDt = (!this._dead && this._controlsActive()) ? dt : 0;
     if (this._online && this._mistBoss) this._mistBoss.update(entityDt,this.player);
     this.combat?.tick(dt);

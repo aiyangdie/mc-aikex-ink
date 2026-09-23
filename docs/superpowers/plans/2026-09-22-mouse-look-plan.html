@@ -1,0 +1,48 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>鼠标移动即转视角 · 实现计划</title><style>*,*::before,*::after{box-sizing:border-box}body{margin:0;background:#0a0a0a;color:#f5f5f5;font:15px/1.75 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif}main{max-width:1080px;margin:auto;padding:42px 24px 100px}h1{font-size:38px;line-height:1.25;margin:12px 0}h2{color:#737373;font-size:12px;letter-spacing:.15em;margin:52px 0 10px}h3{font-size:24px;margin:0 0 12px}h4{font-size:18px;margin:24px 0 12px}p{color:#a3a3a3}strong{color:#f5f5f5}.eyebrow,.meta{font-size:12px;color:#737373;letter-spacing:.1em}.verdict{border-left:2px solid #34d399;background:rgba(16,185,129,.05);padding:18px 22px;margin:20px 0}.warn{border-left:2px solid #fbbf24;background:rgba(245,158,11,.05);padding:18px 22px;margin:20px 0}.card{border:1px solid #262626;background:rgba(23,23,23,.5);border-radius:14px;padding:20px 24px;margin:20px 0}pre,code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#111;color:#d4d4d4}pre{white-space:pre-wrap;overflow-wrap:anywhere;border-radius:12px;padding:16px;font-size:12.5px;line-height:1.6}code{padding:2px 5px;border-radius:5px}li{margin:7px 0;color:#d4d4d4}.tw{overflow-x:auto;border:1px solid #262626;border-radius:14px}table{width:100%;border-collapse:collapse;min-width:620px;font-size:13px}th,td{text-align:left;padding:10px 13px;border-bottom:1px solid #262626;vertical-align:top}th{background:#141414;color:#a3a3a3}td{color:#d4d4d4}a{color:#7dd3fc}@media(max-width:600px){main{padding:24px 18px 70px}h1{font-size:29px}}</style></head><body><main>
+<div class="eyebrow">IMPLEMENTATION PLAN · 2026-09-22 · REVIEW REQUESTED</div><h1>鼠标移动即转视角 · 实现计划</h1>
+<div class="verdict"><strong>For agentic workers:</strong> 执行前由用户选择单会话或子代理方式；逐任务 TDD 红绿、验证并提交，未验证不得声称完成。</div>
+<p><strong>Goal:</strong> 桌面端无需按住右键即可移动视角，右键只放置；聊天/确认框期间视角暂停。</p><p><strong>Architecture:</strong> 保留 Pointer Lock 主路径，替换现有 fallback 的右键拖动为画布 hover mousemove；控制状态由 Game._controlsActive 与 _chatOpen 统一门控。</p><p><strong>Tech Stack:</strong> DOM Pointer Lock API、Three.js、node:test、Playwright</p><p><strong>Spec:</strong> <code>docs/superpowers/specs/2026-09-22-room-nuke-reset-design.html</code></p>
+<h2>00 / GLOBAL CONSTRAINTS</h2><h3>跨任务硬约束</h3><ul><li>保留原仓库安全/沙箱规则，AGENTS.md 的用户注入差异不得提交。</li><li>人物模型朝向 -Math.PI/2 保持不变；原有 AK、法师、炸弹与 PvP 自动复活继续工作。</li><li>仅在本地服务/临时房间测试；不得对生产联机房间触发核弹或地形重置。</li><li>没有上游写权限；完成后只推 Fork 并提交上游 PR，合并/部署交维护者。</li><li>指针锁定失败时受浏览器窗口边缘限制，不承诺无限旋转。</li><li>打开聊天/确认时鼠标不转视角；右键仍为放置，Esc 暂停。</li></ul>
+<h2>01 / FILE MAP</h2><h3>职责与接口</h3><div class="tw"><table><tr><th>文件</th><th>职责</th></tr><tr><td><code>js/game.js</code></td><td>指针锁定、fallback 鼠标事件与聊天状态门控。</td></tr><tr><td><code>tests/mouse-look.test.mjs</code></td><td>合成事件红绿回归。</td></tr><tr><td><code>scripts/verify-mouse-look-browser.mjs</code></td><td>WebGL 实际输入验收。</td></tr></table></div>
+<h2>02 / REVIEW FOCUS</h2><h3>最容易遗漏的输入与异常</h3><ol><li>Pointer Lock 被拒绝：无按键鼠标移动仍转视角。</li><li>移动到聊天输入框/确认按钮：视角不得改变。</li><li>右键点击画布：只放置一次，不再启动拖动；contextmenu 不弹出。</li><li>浏览器失焦：按键清空并暂停，回焦不自动移动。</li><li>正常 Pointer Lock 下从游戏切到聊天再返回：不产生突跳。</li></ol>
+<h2>03 / TASK</h2><h3>Task 1: 替换 fallback 拖动状态与交互测试</h3><div class="card"><p><strong>Files:</strong> js/game.js:1160-1335; tests/mouse-look.test.mjs (new); README.md</p><p><strong>Interfaces:</strong> Game._canMouseLook(target):boolean; Game._handleMouseMove(event):void; Game._handleMouseDown(event):void; Game._chatOpen:boolean; remove _lookDrag; fallback mousemove uses clientX/Y delta。</p><p><strong>Independent deliverable:</strong> 正常移动鼠标换视角，右键仅放置，聊天/菜单不旋转。</p></div>
+<ol><li><strong>Write failing test</strong><pre>test(&#x27;fallback hover look works with no mouse button&#x27;,()=&gt;{
+ const g={canvas:{},_fallbackActive:true,isPointerLocked:false,_chatOpen:false,
+ _controlsActive:()=&gt;true,player:{yaw:0,onMouseMove(dx){this.yaw+=dx}}};
+ Game.prototype._handleMouseMove.call(g,{target:g.canvas,clientX:100,clientY:100});
+ Game.prototype._handleMouseMove.call(g,{target:g.canvas,clientX:120,clientY:90});
+ assert.equal(g.player.yaw,20);assert.equal(g._lookDrag,undefined);
+});
+test(&#x27;UI mouse movement does not rotate and right click places once&#x27;,()=&gt;{
+ const g={canvas:{},_fallbackActive:true,isPointerLocked:false,_chatOpen:true,
+ _controlsActive:()=&gt;true,player:{yaw:0,onMouseMove(dx){this.yaw+=dx}},
+ placements:0,_secondaryAction(){this.placements++}};
+ Game.prototype._handleMouseMove.call(g,{target:g.canvas,clientX:130,clientY:90});
+ assert.equal(g.player.yaw,0);g._chatOpen=false;
+ Game.prototype._handleMouseDown.call(g,{target:g.canvas,button:2});
+ assert.equal(g.placements,1);
+});</pre></li><li><strong>Run red</strong><pre>node --test tests/mouse-look.test.mjs  # expect hover yaw unchanged, right drag state exists</pre></li><li><strong>Implement minimal behavior</strong><pre>_canMouseLook(target) {
+ return this._controlsActive() &amp;&amp; !this._chatOpen &amp;&amp; target===this.canvas;
+}
+_handleMouseMove(e) {
+ if(!this._canMouseLook(e.target))return;
+ if(this.isPointerLocked)this.player.onMouseMove(e.movementX,e.movementY);
+ else if(this._fallbackActive){const last=this._lastMousePoint;
+  if(last)this.player.onMouseMove(e.clientX-last.x,e.clientY-last.y);
+  this._lastMousePoint={x:e.clientX,y:e.clientY};}
+}
+_handleMouseDown(e){if(!this._controlsActive()||this._chatOpen)return;
+ if(e.button===2)this._secondaryAction();else if(e.button===0)this._primaryAction();}
+// Reset _lastMousePoint on canvas leave/blur/chat close; pointerlockchange must
+// not show pauseScreen when chat or host confirmation intentionally releases lock.</pre></li><li><strong>Run green and regression</strong><pre>node --test tests/mouse-look.test.mjs &amp;&amp; npm test</pre></li><li><strong>Commit only task files</strong><pre>git add js/game.js tests/mouse-look.test.mjs README.md &amp;&amp; git commit -m &quot;feat: enable direct mouse look without right-drag&quot;</pre></li></ol>
+<h2>04 / TASK</h2><h3>Task 2: 真实浏览器输入验收</h3><div class="card"><p><strong>Files:</strong> scripts/verify-mouse-look-browser.mjs (new); docs/verification/ (local-only screenshots)</p><p><strong>Interfaces:</strong> Playwright page on 127.0.0.1:8086 with isolated local backend; page.mouse.move / click; no production interactions。</p><p><strong>Independent deliverable:</strong> 在实际 WebGL 页面证明视角变化、右键放置和聊天输入停用镜头。</p></div>
+<ol><li><strong>Write failing test</strong><pre>await page.addInitScript(()=&gt;{HTMLCanvasElement.prototype.requestPointerLock=()=&gt;Promise.reject(Error(&#x27;test&#x27;));});
+const before=await page.evaluate(()=&gt;window.__testGame.player.yaw);
+await page.mouse.move(500,350);await page.mouse.move(560,350);
+const after=await page.evaluate(()=&gt;window.__testGame.player.yaw);
+assert.notEqual(after,before);
+// Inject __testGame only through Playwright route in local test; never ship globally.
+// Then open T chat, move mouse, assert yaw unchanged; right click places once.</pre></li><li><strong>Run red</strong><pre>node scripts/verify-mouse-look-browser.mjs  # expect browser assertion until code wired</pre></li><li><strong>Implement minimal behavior</strong><pre>// Add test-only script using Playwright requestPointerLock override at page init;
+// no production debug globals; inspect behavior through DOM/test hook.
+// Save screenshots in local docs/verification and keep folder excluded from git.</pre></li><li><strong>Run green and regression</strong><pre>npm test &amp;&amp; node scripts/verify-mouse-look-browser.mjs &amp;&amp; node scripts/verify-boss-browser.mjs</pre></li><li><strong>Commit only task files</strong><pre>git add scripts/verify-mouse-look-browser.mjs &amp;&amp; git commit -m &quot;test: verify browser mouse-look and chat focus&quot;</pre></li></ol>
+<h2>99 / ACCEPTANCE</h2><h3>验收与交付边界</h3><ul><li>实际本地游戏无按键鼠标移动转视角，右键放置，Esc 暂停仍可用。</li><li>T 聊天/房主确认期间不转动视角，恢复后首个 move 不突跳。</li><li>root/server 测试与既有 Boss 浏览器验证通过。</li></ul><div class="warn">尚未实施；本文件仅供审阅与执行。PR #4 尚待上游维护者合并，不能绕过权限或直接声称已部署。</div><p class="meta">本地文件：docs/superpowers/plans/2026-09-22-mouse-look-plan.html</p></main></body></html>

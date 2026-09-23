@@ -17,12 +17,18 @@
 </head>
 <body>
   <canvas id="gameCanvas"></canvas>
+  <div id="nukeFlash" aria-hidden="true"></div>
   <div id="crosshair">+</div>
   <div id="selectedBlockName">草地</div>
   <div id="hotbar"></div>
   <div id="blockHighlight"></div>
   <div id="debugInfo"></div>
 
+  <section id="roomChat" hidden aria-label="房间聊天">
+    <div id="roomChatLog" role="log" aria-live="polite"></div>
+    <form id="roomChatForm" hidden><input id="roomChatInput" type="text" maxlength="200" autocomplete="off" aria-label="房间聊天内容" placeholder="输入聊天消息，Enter 发送，Esc 关闭" /></form>
+    <div class="room-chat-actions"><span>T 聊天</span><button id="btnTerrainReset" class="game-btn tiny" type="button" hidden>重置地形</button></div>
+  </section>
   <div id="controlsPanel" class="desktop-only">
     <div class="controls-trigger">?</div>
     <div class="controls-body">
@@ -33,7 +39,8 @@
       <div class="control-row"><span class="key">`</span><span>管理面板</span></div>
       <div class="control-row"><span class="key">Q</span><span>AK / 法师切换</span></div>
       <div class="control-row"><span class="key">Z</span><span>闪现</span></div>
-      <div class="control-row"><span class="key">Shift</span><span>冲刺</span></div>
+<div class="control-row"><span class="key">Shift</span><span>冲刺</span></div>
+      <div class="control-row"><span class="key">T</span><span>联机聊天</span></div>
       <div class="control-row"><span class="key">G</span><span>点燃地狱门</span></div>
       <div class="control-row"><span class="key">C</span><span>木头→木板</span></div>
       <div class="control-row"><span class="key">F</span><span>吃肉回血（先猎杀动物）</span></div>
