@@ -34,6 +34,10 @@ node server.js
 
 管理面板：游戏内按 `` ` ``，用 `MC_OWNER_KEY` 登录。
 
+## 世界模拟层
+
+服务器权威、贴地/寻路/卡住与调试约定见 [docs/WORLD_SIM.md](docs/WORLD_SIM.md)。
+
 ## 三人协作
 
 见 [CONTRIBUTING.md](CONTRIBUTING.md)。

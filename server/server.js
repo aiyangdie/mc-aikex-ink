@@ -32,6 +32,8 @@ function publicNukeProjectile(p) {
 const { isSolid } = await import('../js/voxel.js');
 const { getFoodHeal } = await import('../js/items.js');
 const { buildMobDrops } = await import('../js/loot.js');
+const { findStandY } = await import('../js/nav-grid.js');
+const { createBrain, tickBrain, forceFlee } = await import('../js/mob-brain.js');
 const PORT = Number(process.env.PORT || 3040);
 const HOST = process.env.HOST || '127.0.0.1';
 const OWNER_KEY = process.env.MC_OWNER_KEY || 'aikex-mc-2026';
@@ -86,22 +88,22 @@ function nextMobId() {
 class Mob {
   constructor(kind, x, y, z) {
     this.id = nextMobId();
-    this.kind = kind; // scout | heavy
+    this.kind = kind;
     this.x = x;
     this.y = y;
     this.z = z;
     this.yaw = Math.random() * Math.PI * 2;
     const HP = { pig:8,cow:12,chicken:4,duck:5,deer:10,horse:16,donkey:14,scout:10,heavy:20,dragon:200 };
+    const SPD = { pig:1.3,cow:1.0,chicken:1.6,duck:1.4,deer:2.0,horse:2.2,donkey:1.8,scout:1.5,heavy:0.8 };
     this.maxHp = HP[kind] || 8;
     this.hp = this.maxHp;
-    this.speed = kind === 'heavy' ? 0.8 : 1.2;
-    this.dir = Math.random() * Math.PI * 2;
-    this.state = 'wander';
-    this.stateTimer = 0;
+    this.speed = SPD[kind] != null ? SPD[kind] : 1.2;
     this.alive = true;
-    this.stuckTime = 0;
+    this.state = 'idle';
     this.width = { pig:.8,cow:.95,chicken:.45,duck:.5,deer:.7,horse:.9,donkey:.85,scout:.7,heavy:.9,dragon:1.2 }[kind] || .8;
     this.height = { pig:.85,cow:1.15,chicken:.55,duck:.55,deer:1.2,horse:1.4,donkey:1.25,scout:1,heavy:1.2,dragon:2 }[kind] || 1;
+    this._brain = createBrain(Math.random());
+    this._navOpts = { halfW: this.width * 0.4, bodyH: Math.max(1, Math.ceil(this.height)) };
   }
 
   toJSON() {
@@ -112,62 +114,19 @@ class Mob {
     };
   }
 
-  _groundY(world, x, z) {
-    for (let y = 46; y >= 0; y--) {
-      if (isSolid(world.getBlock(Math.floor(x), y, Math.floor(z)))
-          && !isSolid(world.getBlock(Math.floor(x), y + 1, Math.floor(z)))
-          && !isSolid(world.getBlock(Math.floor(x), y + 2, Math.floor(z)))) return y + 1;
-    }
-    return null;
-  }
-
-  _canOccupy(world, x, y, z) {
-    const half = this.width * 0.5;
-    const minX = Math.floor(x - half + 0.08), maxX = Math.floor(x + half - 0.08);
-    const minZ = Math.floor(z - half + 0.08), maxZ = Math.floor(z + half - 0.08);
-    const minY = Math.floor(y + 0.05), maxY = Math.floor(y + this.height - 0.05);
-    for (let bx = minX; bx <= maxX; bx++) for (let bz = minZ; bz <= maxZ; bz++) {
-      for (let by = minY; by <= maxY; by++) if (isSolid(world.getBlock(bx, by, bz))) return false;
-    }
-    return true;
-  }
-
   tick(dt, world) {
-    if (!this.alive) return;
-    this.stateTimer = Math.max(0, this.stateTimer - dt);
-    if (this.state === 'flee' && this.stateTimer <= 0) this.state = 'wander';
-    if (Math.random() < dt * 0.4) this.dir += (Math.random() - 0.5) * 1.2;
-    // 圈在出生点附近
-    const cx = 5.4, cz = 22.6;
-    const dx = this.x - cx, dz = this.z - cz;
-    if (dx * dx + dz * dz > 28 * 28) {
-      this.dir = Math.atan2(cz - this.z, cx - this.x);
-    }
-    const offsets = [0, .55, -.55, 1.1, -1.1, Math.PI];
-    let moved = false;
-    const step = this.speed * (this.state === 'flee' ? 1.8 : 1) * Math.min(dt, .2);
-    for (const offset of offsets) {
-      const angle = this.dir + offset;
-      const x = this.x + Math.cos(angle) * step;
-      const z = this.z + Math.sin(angle) * step;
-      const y = this._groundY(world, x, z);
-      if (y === null || Math.abs(y - this.y) > 1.05 || !this._canOccupy(world, x, y, z)) continue;
-      this.x = x; this.y = y; this.z = z; this.dir = angle; moved = true; this.stuckTime = 0; break;
-    }
-    if (!moved) {
-      this.stuckTime += dt;
-      this.dir += 0.8 + Math.random() * 1.4;
-      if (this.stuckTime > 2) {
-        for (let i = 0; i < 12; i++) {
-          const a = Math.random() * Math.PI * 2, r = 0.8 + Math.random() * 2;
-          const x = this.x + Math.cos(a) * r, z = this.z + Math.sin(a) * r, y = this._groundY(world, x, z);
-          if (y !== null && Math.abs(y - this.y) <= 1.05 && this._canOccupy(world, x, y, z)) {
-            this.x = x; this.y = y; this.z = z; this.dir = a; this.stuckTime = 0; break;
-          }
-        }
-      }
-    }
-    this.yaw = this.dir;
+    if (!this.alive || !world) return;
+    const out = tickBrain(this._brain, this, {
+      dt,
+      world,
+      leash: { x: 5.4, z: 22.6, r: 28 },
+      navOpts: this._navOpts,
+    });
+    this.x = out.x;
+    this.y = out.y;
+    this.z = out.z;
+    this.yaw = out.yaw;
+    this.state = out.state;
   }
 }
 
@@ -190,8 +149,8 @@ class Room {
     this.createdAt = Date.now();
     this.lastActive = Date.now();
     this.emptyAt = 0;
-    this._spawnMobs();
     this.collision = new CollisionWorld(this.seed, this.edits);
+    this._spawnMobs();
     this.boss = new RoomBoss(this.collision);
   }
 
@@ -202,7 +161,14 @@ class Room {
     for (const kind of kinds) {
       const a = Math.random() * Math.PI * 2;
       const d = 5 + Math.random() * 16;
-      const m = new Mob(kind, 5.4 + Math.cos(a) * d, baseY, 22.6 + Math.sin(a) * d);
+      const x = 5.4 + Math.cos(a) * d;
+      const z = 22.6 + Math.sin(a) * d;
+      let y = baseY;
+      if (this.collision) {
+        const stand = findStandY(this.collision, x, z, baseY, { lookUp: 8, lookDown: 12 });
+        if (stand !== null) y = stand;
+      }
+      const m = new Mob(kind, x, y, z);
       this.mobs.set(m.id, m);
     }
   }
@@ -215,13 +181,18 @@ class Room {
     const m = this.mobs.get(id);
     if (!m || !m.alive) return null;
     m.hp -= Math.max(1, Math.min(10, dmg | 0 || 3));
-    const attacker = this.peers.get(byId);
-    if (attacker && Number.isFinite(attacker.x) && Number.isFinite(attacker.z)) {
-      const dx = m.x - attacker.x, dz = m.z - attacker.z;
-      if (Math.hypot(dx, dz) > 0.001) m.dir = Math.atan2(dz, dx);
-      m.state = 'flee';
-      m.stateTimer = 2.2;
+    let attacker = null;
+    if (byId) {
+      for (const p of this.peers.values()) {
+        if (p.id === byId) { attacker = p; break; }
     }
+    }
+    if (attacker && Number.isFinite(attacker.x) && Number.isFinite(attacker.z)) {
+      forceFlee(m._brain, { x: attacker.x, z: attacker.z }, 2.2);
+    } else {
+      forceFlee(m._brain, null, 2.2);
+    }
+    m.state = m._brain.state;
     this.touch();
     if (m.hp <= 0) {
       m.alive = false;

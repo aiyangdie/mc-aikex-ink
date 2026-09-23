@@ -28,6 +28,7 @@ import { NukeVisual } from './nuke-visual.js';
 import { RoomChat } from './room-chat.js';
 import { mouseLookDelta } from './mouse-look.js';
 import { findStandY } from './boss-navigation.js';
+import { SimDebug } from './sim-debug.js';
 
 /* ============================================
    玩家类 - 第一人称角色控制
@@ -1066,6 +1067,8 @@ export class Game {
 
     // 初始化机器人生成管理器
     this.animalManager = new AnimalManager(this.scene, this.world, this.isMobile);
+    this.simDebug = new SimDebug(this.scene);
+    this._simDebugOn = false;
     this.bombs = new BombManager(this);
 
     // 相机：更接近真人视野；持枪/冲刺会动态微调
@@ -1303,6 +1306,10 @@ export class Game {
       if (e.code === 'KeyG' && this.isRunning) {
         e.preventDefault();
         this._tryIgnitePortal();
+      }
+      if (e.code === 'F3' && this.isRunning) {
+        e.preventDefault();
+        this._simDebugOn = this.simDebug?.toggle() || false;
       }
 
       // ESC 暂停（移动端也支持）
@@ -3126,7 +3133,8 @@ export class Game {
       (this._dragon ? ` · 龙:${this._dragon.hp}` : '') + `<br>` +
       `维度: ${this.dimension}<br>` +
       `存档改动: ${this.world.edits.size}` +
-      (this._online ? `<br>联机: ${this.net.room} (${1 + this.remotes.map.size}人)` : '');
+      (this._online ? `<br>联机: ${this.net.room} (${1 + this.remotes.map.size}人)` : '') +
+      (this._simDebugOn ? `<br>simDebug: ON (F3)` : '');
 
     // 目标方块提示（已禁用）
     this.ui.blockHighlight.style.display = 'none';
@@ -3194,6 +3202,13 @@ export class Game {
 
     if (this.animalManager) this.animalManager.update(entityDt, this.camera);
     if (this._dragon) this._dragon.update(entityDt);
+    if (this.simDebug?.enabled && this.player) {
+      this.simDebug.update(
+        this.animalManager?.animals || [],
+        this.player.position,
+        this._mistBoss
+      );
+    }
 
     this._updateNukeHUD();
     this.nukeVisual?.tick(dt,this.dimension,this.nukeEquipped&&this._controlsActive()&&!this._chatOpen);

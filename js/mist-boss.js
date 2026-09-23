@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { BossCombat } from './boss-combat.js';
 import { findStandY, findGroundStep, hasLineOfSight } from './boss-navigation.js';
+import { chaseStep } from './mob-brain.js';
 
 /** The original Mist Archives heroine rig, with an added local sword animation. */
 export class MistBoss {
@@ -19,10 +20,17 @@ export class MistBoss {
     this.hurtTimer = 0;
     this.actions = {};
     this.materials = [];
+    this._navCache = null;
+    this._stuckTime = 0;
+    this._navPath = [];
+    this.collisionWidth = 1.0;
+    this.collisionHeight = 2.1;
+    this.id = 'mist-boss';
   }
   get hp() { return this.combat.hp; }
   get maxHp() { return this.combat.maxHp; }
   get dead() { return this.combat.dead; }
+  get state() { return this.combat.state; }
 
   async load() {
     const gltf = await new GLTFLoader().loadAsync(new URL('../assets/models/mist-heroine.glb', import.meta.url).href);
@@ -170,8 +178,20 @@ export class MistBoss {
       visible,playerAlive:player.hp>0,invulnerable:player.invuln>0});
     if (visible && distance > .01 && this.combat.state !== 'attack') this.group.rotation.y = Math.atan2(dx,dz);
     if (result.move) {
-      const step = findGroundStep(this.world, this.position, player.position, { step: 3.4 * dt, maxStep: 1.05 });
-      if (step) this.position.set(step.x, step.y, step.z);
+      const stepped = chaseStep(
+        this.world,
+        { x: this.position.x, y: this.position.y, z: this.position.z, yaw: this.group.rotation.y },
+        player.position,
+        3.4,
+        dt,
+        this._navCache,
+        { halfW: 0.32, bodyH: 2, radius: 24 }
+      );
+      this.position.set(stepped.x, stepped.y, stepped.z);
+      this.group.rotation.y = stepped.yaw;
+      this._navCache = stepped.cache;
+      this._stuckTime = stepped.stuckTime;
+      this._navPath = stepped.path;
     }
     if (result.attackStarted) {
       this.group.rotation.y = Math.atan2(dx,dz);
