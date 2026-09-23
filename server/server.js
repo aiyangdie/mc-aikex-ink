@@ -22,6 +22,13 @@ const { RoomBoss, CollisionWorld } = await import('./room-boss.mjs');
 const { RoomTerrain } = await import('./room-terrain.mjs');
 const { isNukeCode, sanitizeChat } = await import('./room-chat.mjs');
 const { resetRoomTerrain } = await import('./room-authority.mjs');
+const { beginNukeThrow, stepNukeProjectile } = await import('./nuke-projectile.mjs');
+const nukeCooldownUntil = room => room.lastNukeAt ? room.lastNukeAt + 300_000 : 0;
+function publicNukeProjectile(p) {
+  if (!p) return null;
+  const {id,ownerId,dimension,x,y,z}=p;
+  return {id,ownerId,dimension,x,y,z};
+}
 const { isSolid } = await import('../js/voxel.js');
 const { getFoodHeal } = await import('../js/items.js');
 const { buildMobDrops } = await import('../js/loot.js');
@@ -175,6 +182,7 @@ class Room {
     this.edits = this.terrain.getEdits();
     this.terrainRevision = 0;
     this.lastNukeAt=0;
+    this.nukeProjectile=null;
     this.dragonKilled=false;
     this.peers = new Map();
     this.mobs = new Map();
@@ -267,6 +275,9 @@ class Room {
   snapshotFor(ws) {
     return {
       t: 'sync',
+      nukeUnlocked: !!this.peers.get(ws)?.nukeUnlocked,
+      nukeCooldownUntil: nukeCooldownUntil(this),
+      nukeProjectile: publicNukeProjectile(this.nukeProjectile),
       boss: this.boss.snapshot(),
 
       spells: this.spells.snapshot(Date.now()),
@@ -457,6 +468,9 @@ function joinRoom(ws, room, name) {
 
   send(ws, {
     t: 'joined',
+    nukeUnlocked: !!peer.nukeUnlocked,
+    nukeCooldownUntil: nukeCooldownUntil(room),
+    nukeProjectile: publicNukeProjectile(room.nukeProjectile),
     boss: room.boss.snapshot(),
 
     spells: room.spells.snapshot(Date.now()),
@@ -828,6 +842,18 @@ wss.on('connection', (ws) => {
       }
       room.broadcast({t:'chat',by:peer.name,text});return;
     }
+    if (msg.t === 'nuke_throw') {
+      const now=Date.now();
+      const projectile=beginNukeThrow(room,peer,now);
+      if (!projectile) {
+        const msg=!peer.nukeUnlocked?'尚未领取核弹':
+          (!peer.active||peer.hp<=0)?'存活并进入游戏后才能投掷':
+          (room.nukeProjectile||nukeCooldownUntil(room)>now)?'核弹冷却中':'无法投掷核弹';
+        send(ws,{t:'err',msg});return;
+      }
+      room.broadcast({t:'nuke_projectile',phase:'spawn',...publicNukeProjectile(projectile),cooldownUntil:nukeCooldownUntil(room)});
+      return;
+    }
     if (msg.t === 'terrain_reset') {
       if(!resetRoomTerrain(room,peer)){send(ws,{t:'err',msg:'仅房主可重置地形'});return;}
       room.broadcast({t:'terrain_reset',revision:room.terrainRevision,editsByDimension:room.terrain.toJSON()});
@@ -1032,6 +1058,31 @@ setInterval(() => {
     room.broadcast({ t: 'mobs', list: room.mobsArray() });
   }
 }, 200);
+
+// Projectile authority continues even when the owner (or every peer) disconnects.
+setInterval(() => {
+  const now=Date.now();
+  for (const room of rooms.values()) {
+    const projectile=room.nukeProjectile;
+    if (!projectile) continue;
+    const result=stepNukeProjectile(room,projectile,.05,now);
+    if (!result) continue;
+    room.broadcast({t:'nuke_projectile',phase:result.status==='flying'?'update':'end',
+      ...publicNukeProjectile(projectile),status:result.status,cooldownUntil:nukeCooldownUntil(room)});
+    if (result.status==='impact') {
+      room.broadcast({t:'nuke',...result.event});
+      room.broadcast({t:'mobs',list:room.mobsArray()});
+      room.broadcast({t:'boss',boss:room.boss.snapshot()});
+      for (const [ws,peer] of room.peers) if (peer.id!==projectile.ownerId) {
+        send(ws,{t:'vitals',hp:peer.hp,cause:'nuke'});
+        room.broadcast({t:'combat',...combat.state(peer),cause:'nuke'});
+      }
+    } else if (result.status==='rejected') {
+      // Broadcast failure to this room; the end event also restores the HUD cooldown.
+      room.broadcast({t:'err',msg:'核爆地形校验失败，冷却已回退'});
+    }
+  }
+},50);
 
 // Boss authority at 20 Hz; animation/position snapshots at 5 Hz.
 let bossTick = 0;
