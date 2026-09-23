@@ -54,6 +54,26 @@ try{
   assert.equal(result.grassAds,0);
   await mkdir('docs/verification',{recursive:true});
   await page.locator('#gameCanvas').screenshot({path:'docs/verification/diamond-microtext-close.png'});
+  const underside=await page.evaluate(async()=>{
+    const {BlockType}=await import('/js/voxel.js');
+    const g=window.__oreGame,w=g.world,chunk=g._createChunk(3,3);
+    const x=52,y=18,z=61;
+    if(chunk.getBlock(x-48,y,z-48)!==BlockType.DIAMOND_ORE)throw Error('Expected natural ore missing');
+    w.setBlock(x,y-1,z,BlockType.AIR);
+    // Clear a small viewing shaft underneath the natural ore.
+    for(let dy=2;dy<=4;dy++)w.setBlock(x,y-dy,z,BlockType.AIR);
+    chunk.buildMesh((X,Y,Z)=>w.getBlock(X,Y,Z),w.material,w.waterMaterial);
+    if(chunk.mesh&&!chunk.mesh.parent)g.scene.add(chunk.mesh);
+    if(chunk.adMesh&&!chunk.adMesh.parent)g.scene.add(chunk.adMesh);
+    const ad=chunk.adEntries.find(a=>a.x===x&&a.y===y&&a.z===z&&a.face[1]===-1);
+    if(!ad)throw Error('No underside inscription');
+    g.camera.position.set(x+.5,y-2.7,z+.5);
+    g.camera.lookAt(x+.5,y-.4,z+.5);
+    g.renderer.render(g.scene,g.camera);
+    return {x,y,z,face:ad.face};
+  });
+  await page.locator('#gameCanvas').screenshot({path:'docs/verification/diamond-microtext-underside.png'});
+  console.log('PASS natural diamond underside microtext',underside);
   assert.deepEqual(pageErrors,[]);
   console.log('PASS natural diamond microtext',result);
 } finally {

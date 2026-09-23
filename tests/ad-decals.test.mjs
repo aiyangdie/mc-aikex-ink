@@ -40,7 +40,7 @@ test('decals remain on exposed diamond faces, not removed or covered ones', () =
   const ad=ads[0];
   const removed=(x,y,z)=>x===ad.x&&y===ad.y&&z===ad.z?BlockType.AIR:diamondLayer(x,y,z);
   assert.ok(!select('overworld',removed).some(a=>a.x===ad.x&&a.y===ad.y&&a.z===ad.z));
-  const covered=(x,y,z)=>y===ad.y+1 && Math.abs(x-ad.x)+Math.abs(z-ad.z)===0 ? BlockType.STONE :
+  const covered=(x,y,z)=>Math.abs(y-ad.y)===1 && x===ad.x && z===ad.z ? BlockType.STONE :
     y===ad.y && Math.abs(x-ad.x)+Math.abs(z-ad.z)===1 ? BlockType.STONE : diamondLayer(x,y,z);
   assert.ok(!select('overworld',covered).some(a=>a.x===ad.x&&a.y===ad.y&&a.z===ad.z));
   const isolated=(x,y,z)=>x===ad.x&&y===ad.y&&z===ad.z?BlockType.DIAMOND_ORE:BlockType.AIR;
@@ -145,4 +145,39 @@ test('Game creation, dimension switch, and terrain reset preserve final exposed 
     assert.equal(outcome.reset.matching,outcome.reset.total);
   });
   assert.deepEqual(errors,[]);
+});
+
+test('natural bedrock-level eligible ore gains top microtext when mined open',()=>{
+  const w=new World(new THREE.Scene(),12345),chunk=new Chunk(3,5);
+  w.generateChunkData(chunk);w.chunks.set('3,5',chunk);
+  const x=50,y=0,z=91;
+  assert.equal(w.getBlock(x,y,z),BlockType.DIAMOND_ORE);
+  assert.equal(hasDiamondMicrotext(w.seed,'overworld',x,y,z),true);
+  w.setBlock(x,y+1,z,BlockType.AIR);
+  const ads=selectAdDecals({seed:w.seed,dimension:'overworld',cx:3,cz:5,getBlock:(X,Y,Z)=>w.getBlock(X,Y,Z)});
+  assert.deepEqual(ads.filter(a=>a.x===x&&a.y===y&&a.z===z).map(a=>a.face),[[0,1,0]]);
+  w.setBlock(x,y,z,BlockType.AIR);
+  const after=selectAdDecals({seed:w.seed,dimension:'overworld',cx:3,cz:5,getBlock:(X,Y,Z)=>w.getBlock(X,Y,Z)});
+  assert.ok(!after.some(a=>a.x===x&&a.y===y&&a.z===z));
+});
+test('natural ore exposed only from below receives front-facing bottom decal, then hides when covered',()=>{
+  const w=new World(new THREE.Scene(),12345),chunk=new Chunk(3,3);
+  w.generateChunkData(chunk);w.chunks.set('3,3',chunk);
+  w.adMaterial=new THREE.MeshBasicMaterial();w.configureChunkDecals(chunk);
+  const x=52,y=18,z=61;
+  assert.equal(w.getBlock(x,y,z),BlockType.DIAMOND_ORE);
+  assert.equal(hasDiamondMicrotext(w.seed,'overworld',x,y,z),true);
+  w.setBlock(x,y-1,z,BlockType.AIR);
+  const get=(X,Y,Z)=>w.getBlock(X,Y,Z);
+  chunk.buildMesh(get,w.adMaterial,w.adMaterial);
+  const ad=chunk.adEntries.find(a=>a.x===x&&a.y===y&&a.z===z);
+  assert.deepEqual(ad?.face,[0,-1,0]);
+  const geo=chunk.adMesh.geometry,p=geo.getAttribute('position');
+  const indices=geo.getIndex().array,offset=chunk.adEntries.findIndex(e=>e.x===x&&e.y===y&&e.z===z)*6;
+  const a=new THREE.Vector3().fromBufferAttribute(p,indices[offset]);
+  const b=new THREE.Vector3().fromBufferAttribute(p,indices[offset+1]);
+  const c=new THREE.Vector3().fromBufferAttribute(p,indices[offset+2]);
+  assert.ok(new THREE.Vector3().subVectors(b,a).cross(new THREE.Vector3().subVectors(c,a)).y<0,'front face must point downward');
+  w.setBlock(x,y-1,z,BlockType.STONE);
+  assert.ok(!selectAdDecals({seed:w.seed,dimension:'overworld',cx:3,cz:3,getBlock:get}).some(a=>a.x===x&&a.y===y&&a.z===z));
 });

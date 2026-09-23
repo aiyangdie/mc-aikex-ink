@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import {DIAMOND_ORE_ID} from './diamond-ore.js';
 
 export const AD_TEXT = '激情大戏：spb.biily.top';
-const FACES = [[0,1,0],[0,0,1],[0,0,-1],[1,0,0],[-1,0,0]];
+const FACES = [[0,1,0],[0,0,1],[0,0,-1],[1,0,0],[-1,0,0],[0,-1,0]];
 
 function hash(value) {
   let h = 2166136261;
@@ -21,7 +21,7 @@ export function selectAdDecals({seed,dimension,cx,cz,getBlock}) {
   if(dimension!=='overworld')return [];
   const ads=[];
   const x0=cx*16,z0=cz*16;
-  for(let y=1;y<48;y++) for(let z=z0;z<z0+16;z++) for(let x=x0;x<x0+16;x++) {
+  for(let y=0;y<48;y++) for(let z=z0;z<z0+16;z++) for(let x=x0;x<x0+16;x++) {
     if(getBlock(x,y,z)!==DIAMOND_ORE_ID || !hasDiamondMicrotext(seed,dimension,x,y,z))continue;
     for(const face of FACES) {
       const neighbor=getBlock(x+face[0],y+face[1],z+face[2]);

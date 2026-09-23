@@ -562,7 +562,7 @@ export class Chunk {
       const [nx,ny,nz]=ad.face;
       const center=[ad.x+.5+nx*.506, ad.y+.5+ny*.506, ad.z+.5+nz*.506];
       const right=ny ? [1,0,0] : nx ? [0,0,-nx] : [nz,0,0];
-      const up=ny ? [0,0,-1] : [0,1,0];
+      const up=ny>0 ? [0,0,-1] : ny<0 ? [0,0,1] : [0,1,0];
       const base=positions.length/3;
       for (const [u,v] of [[0,0],[1,0],[1,1],[0,1]]) {
         positions.push(...center.map((c,i)=>c+(u-.5)*.46*right[i]+(v-.5)*.28*up[i]));
