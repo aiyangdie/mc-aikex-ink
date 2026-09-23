@@ -43,3 +43,29 @@ test('large seed sample approaches one diamond ore per 500 natural solid terrain
   const ratio=diamonds/solid;
   assert.ok(ratio>=.0015&&ratio<=.0025,`ratio ${ratio} (${diamonds}/${solid})`);
 });
+
+test('server collision shares natural diamond cells and legacy edits take priority until reset',async()=>{
+  const {CollisionWorld}=await import('../server/room-boss.mjs');
+  const {RoomTerrain}=await import('../server/room-terrain.mjs');
+  const seed=98765,cx=4,cz=7;
+  const client=new World(new THREE.Scene(),seed),chunk=new Chunk(cx,cz);
+  client.generateChunkData(chunk);
+  client.chunks.set(client.chunkKey(cx,cz),chunk);
+  const block=chunk.blocks.findIndex(b=>b===BlockType.DIAMOND_ORE);
+  assert.ok(block>=0);
+  const lx=block%16,lz=Math.floor(block/16)%16,y=Math.floor(block/256);
+  const x=cx*16+lx,z=cz*16+lz;
+  const terrain=RoomTerrain.fromPersist({edits:[x,y,z,BlockType.AIR]});
+  const server=new CollisionWorld(seed,terrain.getEdits('overworld'));
+  assert.equal(client.getBlock(x,y,z),BlockType.DIAMOND_ORE);
+  assert.equal(server.getBlock(x,y,z),BlockType.AIR,'persisted AIR edit wins over new base ore');
+  client.setBlock(x,y,z,BlockType.AIR);
+  assert.equal(client.getBlock(x,y,z),BlockType.AIR);
+  terrain.clearAll();
+  assert.equal(server.getBlock(x,y,z),BlockType.DIAMOND_ORE,'room reset restores same base ore');
+  const reloaded=new World(new THREE.Scene(),seed),next=new Chunk(cx,cz);
+  reloaded.generateChunkData(next);
+  assert.equal(next.getBlock(lx,y,lz),BlockType.DIAMOND_ORE);
+  const placed=RoomTerrain.fromPersist({edits:[x,y,z,BlockType.WOOD]});
+  assert.equal(new CollisionWorld(seed,placed.getEdits('overworld')).getBlock(x,y,z),BlockType.WOOD);
+});
