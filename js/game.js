@@ -898,6 +898,7 @@ export class Game {
         const chunk = await this._createChunk(cx, cz);
         if (chunk.mesh) this.scene.add(chunk.mesh);
         if (chunk.waterMesh) this.scene.add(chunk.waterMesh);
+        if (chunk.adMesh) this.scene.add(chunk.adMesh);
         generated++;
         this.ui.loadingFill.style.width = `${(generated / needed * 100) | 0}%`;
 
@@ -988,6 +989,7 @@ export class Game {
       chunk = this._createChunk(cx, cz);
       if (chunk.mesh) this.scene.add(chunk.mesh);
       if (chunk.waterMesh) this.scene.add(chunk.waterMesh);
+      if (chunk.adMesh) this.scene.add(chunk.adMesh);
       return;
     }
     if (chunk.mesh) this.scene.remove(chunk.mesh);
@@ -1001,6 +1003,7 @@ export class Game {
     );
     if (chunk.mesh) this.scene.add(chunk.mesh);
     if (chunk.waterMesh) this.scene.add(chunk.waterMesh);
+    if (chunk.adMesh) this.scene.add(chunk.adMesh);
   }
 
   /** 创建区块 */
@@ -1011,6 +1014,7 @@ export class Game {
     const chunk = new Chunk(cx, cz);
     this.world.generateChunkData(chunk);
     this.world.applyEdits(chunk);
+    this.world.configureChunkDecals(chunk);
     chunk.buildMesh((wx, wy, wz) => this.world.getBlock(wx, wy, wz), this.world.material, this.world.waterMaterial);
     this.world.chunks.set(key, chunk);
     return chunk;
@@ -2560,6 +2564,7 @@ export class Game {
       chunk.buildMesh((wx,wy,wz)=>this.world.getBlock(wx,wy,wz),this.world.material,this.world.waterMaterial);
       if (chunk.mesh) this.scene.add(chunk.mesh);
       if (chunk.waterMesh) this.scene.add(chunk.waterMesh);
+      if (chunk.adMesh) this.scene.add(chunk.adMesh);
     }
   }
 

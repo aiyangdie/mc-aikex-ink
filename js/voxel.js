@@ -5,6 +5,7 @@
 
 import * as THREE from 'three';
 import { SimplexNoise } from './noise.js?v=groundfix9';
+import { selectAdDecals, createAdTexture } from './ad-decals.js';
 
 /* ============================================
    常量与配置
@@ -407,6 +408,9 @@ export class Chunk {
     this.blocks = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE * CHUNK_HEIGHT);
     this.mesh = null;
     this.waterMesh = null;
+    this.adMesh = null;
+    this.adEntries = [];
+    this.adConfig = null;
     this.dirty = true;
   }
 
@@ -525,10 +529,52 @@ export class Chunk {
       this.waterMesh.position.set(wx0, 0, wz0);
     }
 
+    this._buildDecals(getWorldBlock);
     this.dirty = false;
   }
 
+  _buildDecals(getWorldBlock) {
+    if (!this.adConfig?.material) return;
+    this.adEntries = selectAdDecals({
+      seed: this.adConfig.seed, dimension: this.adConfig.dimension(),
+      cx: this.cx, cz: this.cz, getBlock: (x,y,z) => {
+        const lx=x-this.cx*CHUNK_SIZE, lz=z-this.cz*CHUNK_SIZE;
+        return lx>=0&&lx<CHUNK_SIZE&&lz>=0&&lz<CHUNK_SIZE ? this.getBlock(lx,y,lz) : getWorldBlock(x,y,z);
+      },
+    });
+    if (!this.adEntries.length) return;
+    const positions=[], normals=[], uvs=[], indices=[];
+    for (const ad of this.adEntries) {
+      const [nx,ny,nz]=ad.face;
+      const center=[ad.x+.5+nx*.506, ad.y+.5+ny*.506, ad.z+.5+nz*.506];
+      const right=ny ? [1,0,0] : nx ? [0,0,-nx] : [nz,0,0];
+      const up=ny ? [0,0,-1] : [0,1,0];
+      const base=positions.length/3;
+      for (const [u,v] of [[0,0],[1,0],[1,1],[0,1]]) {
+        positions.push(...center.map((c,i)=>c+(u-.5)*.94*right[i]+(v-.5)*.78*up[i]));
+        normals.push(nx,ny,nz);uvs.push(u,v);
+      }
+      indices.push(base,base+1,base+2,base,base+2,base+3);
+    }
+    const geometry=new THREE.BufferGeometry();
+    geometry.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));
+    geometry.setAttribute('normal',new THREE.Float32BufferAttribute(normals,3));
+    geometry.setAttribute('uv',new THREE.Float32BufferAttribute(uvs,2));
+    geometry.setIndex(indices);
+    this.adMesh=new THREE.Mesh(geometry,this.adConfig.material);
+  }
+
+  _disposeDecals() {
+    if (this.adMesh) {
+      this.adMesh.geometry.dispose();
+      if (this.adMesh.parent) this.adMesh.parent.remove(this.adMesh);
+      this.adMesh=null;
+    }
+    this.adEntries=[];
+  }
+
   _disposeMesh() {
+    this._disposeDecals();
     if (this.mesh) {
       this.mesh.geometry.dispose();
       if (this.mesh.parent) this.mesh.parent.remove(this.mesh);
@@ -558,6 +604,7 @@ export class World {
     this.treeNoise = new SimplexNoise(seed + 777);
     this.chunks = new Map();
     this.material = null;
+    this.adMaterial = null;
     this.pendingChunks = [];
     this.renderDistance = RENDER_DISTANCE;
     /** 玩家改动的方块差分 key=`wx,wy,wz` → BlockType（含 AIR） */
@@ -565,6 +612,7 @@ export class World {
   }
 
   setDimension(dim) {
+    for (const chunk of this.chunks.values()) chunk._disposeDecals();
     this.dimension = dim || Dim.OVERWORLD;
     // 换维度换噪声相位，地形不同
     const base = this.seed + (dim === Dim.NETHER ? 9001 : dim === Dim.END ? 4242 : 0);
@@ -573,12 +621,16 @@ export class World {
   }
 
   init() {
+    if (this.adMaterial) { this.adMaterial.map.dispose(); this.adMaterial.dispose(); }
     const texture = createBlockTexture();
     this.material = new THREE.MeshLambertMaterial({
       map: texture,
       side: THREE.FrontSide,
       transparent: false,
       depthWrite: true,
+    });
+    this.adMaterial = new THREE.MeshBasicMaterial({
+      map: createAdTexture(), side: THREE.FrontSide, transparent: false, depthWrite: true,
     });
     this.waterMaterial = new THREE.MeshLambertMaterial({
       map: texture,
@@ -590,6 +642,30 @@ export class World {
 
   chunkKey(cx, cz) {
     return `${cx},${cz}`;
+  }
+
+  configureChunkDecals(chunk) {
+    chunk.adConfig = {seed:this.seed,dimension:()=>this.dimension,material:this.adMaterial};
+  }
+
+  dispose() {
+    for (const chunk of this.chunks.values()) chunk.dispose();
+    this.chunks.clear();
+    this.pendingChunks.length=0;
+    if (this.adMaterial) {
+      this.adMaterial.map?.dispose();
+      this.adMaterial.dispose();
+      this.adMaterial=null;
+    }
+    if (this.material) {
+      this.material.map?.dispose();
+      this.material.dispose();
+      this.material=null;
+    }
+    if (this.waterMaterial) {
+      this.waterMaterial.dispose();
+      this.waterMaterial=null;
+    }
   }
 
   getBlock(wx, wy, wz) {
@@ -614,6 +690,7 @@ export class World {
     const lx = ((wx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
     const lz = ((wz % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
     chunk.setBlock(lx, wy, lz, type);
+    chunk._disposeDecals(); // The old decal cannot linger until the next mesh rebuild.
 
     if (lx === 0) this._markDirty(cx - 1, cz);
     if (lx === CHUNK_SIZE - 1) this._markDirty(cx + 1, cz);
@@ -643,7 +720,7 @@ export class World {
 
   _markDirty(cx, cz) {
     const chunk = this.chunks.get(this.chunkKey(cx, cz));
-    if (chunk) chunk.dirty = true;
+    if (chunk) { chunk.dirty = true; chunk._disposeDecals(); }
   }
 
   // ────────────── Coze 文字立墙（XY 平面，面朝南）──────────────
@@ -938,6 +1015,10 @@ export class World {
         if (chunk.waterMesh) this.scene.remove(chunk.waterMesh);
         chunk.dispose();
         this.chunks.delete(key);
+        this._markDirty(chunk.cx-1,chunk.cz);
+        this._markDirty(chunk.cx+1,chunk.cz);
+        this._markDirty(chunk.cx,chunk.cz-1);
+        this._markDirty(chunk.cx,chunk.cz+1);
       }
     }
 
@@ -950,11 +1031,17 @@ export class World {
       const chunk = new Chunk(cx, cz);
       this.generateChunkData(chunk);
       this.applyEdits(chunk);
+      this.configureChunkDecals(chunk);
       chunk.buildMesh((wx, wy, wz) => this.getBlock(wx, wy, wz), this.material, this.waterMaterial);
       this.chunks.set(key, chunk);
+      this._markDirty(cx-1,cz);
+      this._markDirty(cx+1,cz);
+      this._markDirty(cx,cz-1);
+      this._markDirty(cx,cz+1);
 
       if (chunk.mesh) this.scene.add(chunk.mesh);
       if (chunk.waterMesh) this.scene.add(chunk.waterMesh);
+      if (chunk.adMesh) this.scene.add(chunk.adMesh);
       processed++;
     }
 
@@ -966,6 +1053,7 @@ export class World {
         chunk.buildMesh((wx, wy, wz) => this.getBlock(wx, wy, wz), this.material, this.waterMaterial);
         if (chunk.mesh && !chunk.mesh.parent) this.scene.add(chunk.mesh);
         if (chunk.waterMesh && !chunk.waterMesh.parent) this.scene.add(chunk.waterMesh);
+        if (chunk.adMesh && !chunk.adMesh.parent) this.scene.add(chunk.adMesh);
         rebuilt++;
       }
     }
