@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import { BlockType, isSolid, Dim } from './voxel.js?v=groundfix9';
 import { ItemType } from './items.js?v=groundfix9';
 import { buildMobDrops } from './loot.js?v=groundfix9';
+import { createBrain, tickBrain, forceFlee } from './mob-brain.js';
 
 const SPAWN_RADIUS = 28;
 const MIN_SPAWN_DIST = 4;
@@ -58,6 +59,8 @@ class Critter {
     this.wanderDir = new THREE.Vector3(1, 0, 0);
     this.bobPhase = Math.random() * 6;
     this._stuckTime = 0;
+    this._brain = createBrain(Math.random());
+    this._navOpts = { halfW: def.w * 0.4, bodyH: Math.max(1, Math.ceil(def.h)) };
     this._lastMove = this.position.clone();
 
     this.group = new THREE.Group();
@@ -234,6 +237,7 @@ class Critter {
     this.hurtTimer = 0.35;
     this.state = 'flee';
     this.stateTimer = 1.8;
+    if (this._brain) forceFlee(this._brain, knockDir, 1.8);
     this._syncHpLabel();
     if (knockDir) {
       const d = knockDir.clone ? knockDir.clone() : new THREE.Vector3(knockDir.x, knockDir.y, knockDir.z);
@@ -338,29 +342,26 @@ class Critter {
       return; // 击退中暂停 AI 步进
     }
 
-    this.stateTimer -= dt;
     this.bobPhase += dt * (this.state === 'idle' ? 2 : 6);
 
-    if (this.state === 'flee' || this.state === 'wander') {
-      const step = this.wanderSpeed * (this.state === 'flee' ? 1.8 : 1) * dt;
-      const dir = this.state === 'flee'
-        ? new THREE.Vector3(Math.cos(this.targetRotation), 0, Math.sin(this.targetRotation))
-        : this.wanderDir;
-      if (!this._tryMove(dir, step, spawnCenter)) {
-        this.targetRotation += randRange(0.6, 1.4);
-        this.wanderDir.set(Math.cos(this.targetRotation), 0, Math.sin(this.targetRotation));
-        this._tryUnstick();
-      }
-      if (this.stateTimer <= 0) {
-        this.state = this.state === 'flee' ? 'wander' : 'idle';
-        this.stateTimer = randRange(1, 4);
-      }
-    } else if (this.stateTimer <= 0) {
-      this.state = 'wander';
-      this.stateTimer = randRange(2, 5);
-      this.wanderDir.set(Math.cos(this.targetRotation), 0, Math.sin(this.targetRotation));
-    }
-
+    // Offline: shared mob-brain + A*. Online puppets return earlier (_netDriven).
+    const out = tickBrain(this._brain, {
+      id: this.id,
+      x: this.position.x,
+      y: this.position.y,
+      z: this.position.z,
+      yaw: this.rotation,
+      speed: this.wanderSpeed,
+    }, {
+      dt,
+      world: this.world,
+      leash: { x: spawnCenter.x, z: spawnCenter.z, r: WANDER_RANGE },
+      navOpts: this._navOpts,
+    });
+    this.position.set(out.x, out.y, out.z);
+    this.state = out.state;
+    this._stuckTime = out.stuckTime || 0;
+    this.targetRotation = out.yaw;
     let short = ((this.targetRotation - this.rotation + Math.PI) % (Math.PI * 2)) - Math.PI;
     this.rotation += short * Math.min(this.turnSpeed * dt, 1);
     this.group.rotation.y = this.rotation;

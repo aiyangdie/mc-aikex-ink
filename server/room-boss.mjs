@@ -1,6 +1,7 @@
 import {World,Chunk,CHUNK_SIZE,CHUNK_HEIGHT,isSolid} from '../js/voxel.js';
 import {BossCombat} from '../js/boss-combat.js';
 import {findStandY,findGroundStep,hasLineOfSight} from '../js/boss-navigation.js';
+import {chaseStep} from '../js/mob-brain.js';
 
 // Reuse the actual generator, without WebGL/DOM. Cache only nearby base chunks;
 // edits are read on every query so placed walls immediately affect pursuit/hits.
@@ -40,6 +41,9 @@ export class RoomBoss {
     this.yaw=saved.yaw||0;
     this.attackId=0;
     this.targetId=null;
+    this._navCache=null;
+    this._stuckTime=0;
+    this._navPath=[];
   }
   get hp(){return this.combat.hp;}
   kill(now=Date.now()){
@@ -96,8 +100,12 @@ export class RoomBoss {
     if(this.combat.state!=='attack'||result.attackStarted)this.yaw=Math.atan2(dx,dz);
     if(result.attackStarted){this.attackId++;this.targetId=target.id;}
     if(result.move){
-      const step=findGroundStep(this.world,this.position,target,{step:3.4*Math.min(dt,.05),maxStep:1.05});
-      if(step) this.position={x:step.x,y:step.y,z:step.z};
+      const stepped=chaseStep(this.world,this.position,target,3.4,dt,this._navCache,{halfW:.32,bodyH:2,radius:24});
+      this.position={x:stepped.x,y:stepped.y,z:stepped.z};
+      this.yaw=stepped.yaw;
+      this._navCache=stepped.cache;
+      this._stuckTime=stepped.stuckTime;
+      this._navPath=stepped.path;
     }
     if(result.hit){target.hp=Math.max(0,target.hp-result.hit);target.invuln=.6;if(!target.hp)target.manualRespawn=true;events.push({id:target.id,hp:target.hp,damage:result.hit,cause:'mist-boss'});}
     return events;
