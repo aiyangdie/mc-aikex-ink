@@ -123,3 +123,50 @@ test('nuke code grants only this connection without detonating or carrying to an
  assert.equal(afterB.self.hp,20);assert.deepEqual(afterB.editsByDimension.overworld,[]);
  assert.doesNotMatch(logs,/TypeError|ReferenceError|SyntaxError/);
 });
+
+// Real close cleanup and the server interval must preserve airborne authority even
+// when the room briefly (or until impact) has no connected peers.
+test('airborne owner close/reconnect loses immunity; empty rooms still settle once', {timeout:20000},async t=>{
+ const reservation=net.createServer();await new Promise(r=>reservation.listen(0,'127.0.0.1',r));
+ const port=reservation.address().port;await new Promise(r=>reservation.close(r));
+ const dir=await mkdtemp(tmpdir()+'/mc-airborne-nuke-');
+ const child=spawn(process.execPath,['server/server.js'],{cwd:new URL('../',import.meta.url),env:{...process.env,PORT:String(port),HOST:'127.0.0.1',MC_DATA_DIR:dir,MC_OWNER_KEY:'test-only-owner'}});
+ let logs='';child.stdout.on('data',b=>logs+=b);child.stderr.on('data',b=>logs+=b);
+ const clients=[];
+ t.after(async()=>{for(const c of clients)c.ws.close();if(child.exitCode===null){child.kill('SIGTERM');await new Promise(r=>child.once('exit',r));}await rm(dir,{recursive:true,force:true});});
+ for(let i=0;i<100&&!logs.includes('http://');i++)await delay(25);assert.match(logs,/http:\/\//,logs);
+ const connect=async()=>{const c=await socket('ws://127.0.0.1:'+port+'/ws');clients.push(c);return c;};
+ for(const remainEmpty of [false,true]){
+  const owner=await connect();owner.send({t:'create',name:'owner'});const joined=await owner.wait(m=>m.t==='joined');
+  owner.send({t:'play'});
+  owner.send({t:'move',x:200.5,y:35,z:200.5,yaw:0,pitch:0,dimension:'end'});
+  owner.send({t:'chat',text:'Maydaymayday'});await owner.wait(m=>m.t==='nuke_granted');
+  owner.send({t:'nuke_throw'});const projectile=await owner.wait(m=>m.t==='nuke_projectile'&&m.phase==='spawn');
+  assert.equal(projectile.y,36.5);assert.equal(projectile.dimension,'end');
+  await new Promise(resolve=>{owner.ws.addEventListener('close',resolve,{once:true});owner.ws.close();});
+  if(remainEmpty)await delay(3300); // Longer than the hard three-second lifetime.
+  const fresh=await connect();fresh.send({t:'join',room:joined.room,name:'owner'});
+  const rejoined=await fresh.wait(m=>m.t==='joined');
+  assert.notEqual(rejoined.id,joined.id);assert.equal(rejoined.nukeUnlocked,false);
+  assert.equal(rejoined.nukeCooldownUntil,projectile.cooldownUntil);
+  if(!remainEmpty){
+   assert.equal(rejoined.nukeProjectile.id,projectile.id,'reconnect actually occurred while airborne');
+   fresh.send({t:'play'});
+   fresh.send({t:'move',x:200.5,y:35,z:200.5,yaw:0,pitch:0,dimension:'end'});
+   const impact=await fresh.wait(m=>m.t==='nuke');assert.equal(impact.casterId,joined.id);
+   const end=await fresh.wait(m=>m.t==='nuke_projectile'&&m.phase==='end');assert.equal(end.id,projectile.id);
+   assert.equal(end.status,'impact');
+  }else assert.equal(rejoined.nukeProjectile,null,'empty room was ticked to settlement');
+  await delay(250);
+  fresh.send({t:'sync'});const settled=await fresh.wait(m=>m.t==='sync');
+  assert.equal(settled.nukeProjectile,null);assert.equal(settled.nukeUnlocked,false);
+  assert.equal(settled.terrainRevision,1,'exactly one settlement, including an empty room');
+  assert.equal(settled.nukeCooldownUntil,projectile.cooldownUntil);
+  assert.ok(settled.editsByDimension.end.some((value,index)=>index%4===3&&value===0),'settlement persisted crater edits');
+  if(!remainEmpty){assert.equal(settled.self.hp,0,'fresh connection has no original-owner immunity');assertNoNuke(fresh);assert.equal(fresh.messages.filter(m=>m.t==='nuke_projectile'&&m.phase==='end').length,0);}
+  fresh.send({t:'sync'});const again=await fresh.wait(m=>m.t==='sync');
+  assert.deepEqual(again.editsByDimension,settled.editsByDimension);assert.equal(again.nukeCooldownUntil,settled.nukeCooldownUntil);
+  assert.equal(again.terrainRevision,1);
+ }
+ assert.doesNotMatch(logs,/TypeError|ReferenceError|SyntaxError/);
+});

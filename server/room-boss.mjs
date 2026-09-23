@@ -5,7 +5,7 @@ import {findStandY,findGroundStep,hasLineOfSight} from '../js/boss-navigation.js
 // Reuse the actual generator, without WebGL/DOM. Cache only nearby base chunks;
 // edits are read on every query so placed walls immediately affect pursuit/hits.
 export class CollisionWorld {
-  constructor(seed,edits,dimension='overworld') { this.base=new World(null,seed); this.base.dimension=dimension; this.edits=edits; }
+  constructor(seed,edits,dimension='overworld') { this.base=new World(null,seed); this.base.setDimension(dimension); this.edits=edits; }
   getBlock(x,y,z) {
     if(y<0||y>=CHUNK_HEIGHT||Math.abs(x)>4096||Math.abs(z)>4096)return 0;
     const key=`${x},${y},${z}`;

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {RoomTerrain} from '../server/room-terrain.mjs';
 import {CollisionWorld,RoomBoss} from '../server/room-boss.mjs';
+import {World,Chunk,CHUNK_SIZE,CHUNK_HEIGHT,isSolid} from '../js/voxel.js';
 import * as api from '../server/nuke-projectile.mjs';
 function fixture(limit=60000){
  const peer={id:'owner',active:true,hp:20,nukeUnlocked:true,x:.5,y:35,z:.5,yaw:0,pitch:0,dimension:'overworld'};
@@ -81,3 +82,33 @@ test('an embedded launch settles before leaving the initial solid voxel',()=>{
  const result=api.stepNukeProjectile(room,p,.005,10005);
  assert.equal(result.status,'impact');assert.deepEqual(result.event.origin,{x:.999,y:35.5,z:.5});
 });
+
+// Regression: assigning dimension without setDimension retains overworld noise.
+for(const dimension of ['overworld','nether','end'])test(`natural ${dimension} collision matches client-generated chunks`,()=>{
+ const client=new World(null,12345);client.setDimension(dimension);
+ const collision=new CollisionWorld(12345,new Map(),dimension);
+ for(const [cx,cz] of [[0,0],[-3,-3],[-3,-2],[2,1]]){
+  const chunk=new Chunk(cx,cz);client.generateChunkData(chunk);
+  client.chunks.set(client.chunkKey(cx,cz),chunk);
+  for(let x=cx*CHUNK_SIZE;x<(cx+1)*CHUNK_SIZE;x++)
+   for(let z=cz*CHUNK_SIZE;z<(cz+1)*CHUNK_SIZE;z++)
+    for(let y=0;y<CHUNK_HEIGHT;y++)
+     assert.equal(collision.getBlock(x,y,z),client.getBlock(x,y,z),`${dimension} ${x},${y},${z}`);
+ }
+});
+for(const [dimension,x,z,surfaceY] of [['nether',-48,-48,15],['end',-48,-25,17]])
+ test(`projectile hits unedited ${dimension} surface, not incorrectly seeded terrain`,()=>{
+  const client=new World(null,12345);client.setDimension(dimension);
+  const chunk=new Chunk(Math.floor(x/CHUNK_SIZE),Math.floor(z/CHUNK_SIZE));
+  client.generateChunkData(chunk);client.chunks.set(client.chunkKey(chunk.cx,chunk.cz),chunk);
+  assert.ok(isSolid(client.getBlock(x,surfaceY,z)));
+  assert.equal(client.getBlock(x,surfaceY+1,z),0);
+  const {room,peer}=fixture();room.seed=12345;
+  Object.assign(peer,{dimension,x:x+.5,z:z+.5,y:surfaceY+2,pitch:-Math.PI/2});
+  assert.equal(room.terrain.size,0,'no artificial corridor or surface edits');
+  const p=api.beginNukeThrow(room,peer,10000);
+  const result=api.stepNukeProjectile(room,p,.5,10500);
+  assert.equal(result.status,'impact');
+  assert.equal(result.event.dimension,dimension);
+  assert.deepEqual(['x','y','z'].map(axis=>Math.floor(result.event.origin[axis])),[x,surfaceY,z]);
+ });
