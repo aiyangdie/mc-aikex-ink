@@ -1470,3 +1470,12 @@ body.combat-hurt::after {
 #nukeFlash{position:fixed;inset:0;z-index:24;pointer-events:none;opacity:0;background:radial-gradient(circle at center,#fffbd5 0%,#ffbd6a 28%,#c64420 65%,#1a0906 100%)}
 #nukeFlash.blast{animation:roomBlast .85s ease-out both}
 @keyframes roomBlast{0%{opacity:.85}25%{opacity:.68}100%{opacity:0}}
+
+/* Session-only equipment: separate from the nine inventory slots. */
+#nukeHud[hidden],#nukeThrow[hidden]{display:none!important}
+#nukeHud{position:fixed;left:50%;transform:translateX(-50%);top:60px;z-index:80;display:flex;gap:8px;align-items:center;flex-wrap:wrap;max-width:calc(100vw - 36px);padding:8px 10px;background:#14202ee8;border:1px solid #718398;border-radius:8px;color:#fff;font:13px/1.4 monospace}
+#nukeHud button{min-height:44px;padding:8px 12px;color:#fff;background:#704529;border:1px solid #d5a66d;border-radius:5px;touch-action:manipulation;cursor:pointer;font:inherit}
+#nukeHud button[aria-pressed="true"]{background:#686b2d;border-color:#f4d376;box-shadow:inset 0 0 0 1px #f4d376}
+#nukeHud button:disabled{opacity:.55;cursor:default}
+#nukeHud button:focus-visible{outline:2px solid #fff;outline-offset:3px}
+@media(max-width:700px){#nukeHud{top:72px;max-width:calc(100vw - 16px);font-size:12px;gap:6px}}

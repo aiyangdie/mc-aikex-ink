@@ -5,6 +5,8 @@
 
 import * as THREE from 'three';
 import { SimplexNoise } from './noise.js?v=groundfix9';
+import { selectAdDecals, createAdTexture } from './ad-decals.js';
+import { selectDiamondOrePositions, DIAMOND_ORE_ID } from './diamond-ore.js';
 
 /* ============================================
    常量与配置
@@ -47,6 +49,7 @@ export const BlockType = {
   PORTAL: 13,      // 传送门（可穿过）
   END_STONE: 14,   // 末地石
   PLANKS: 15,      // 木板 · 造房子
+  DIAMOND_ORE: DIAMOND_ORE_ID, // 钻石矿
 };
 
 export const BlockNames = {
@@ -65,6 +68,7 @@ export const BlockNames = {
   [BlockType.PORTAL]: '传送门',
   [BlockType.END_STONE]: '末地石',
   [BlockType.PLANKS]: '木板',
+  [BlockType.DIAMOND_ORE]: '钻石矿',
 };
 
 const NON_SOLID = new Set([BlockType.AIR, BlockType.WATER, BlockType.PORTAL]);
@@ -98,6 +102,7 @@ const TEX = {
   PORTAL: 14,
   END_STONE: 15,
   PLANKS: 16,
+  DIAMOND_ORE: 17,
 };
 
 const BLOCK_TEXTURES = {
@@ -116,6 +121,7 @@ const BLOCK_TEXTURES = {
   [BlockType.PORTAL]:     { top: TEX.PORTAL,       side: TEX.PORTAL,     bottom: TEX.PORTAL },
   [BlockType.END_STONE]:  { top: TEX.END_STONE,    side: TEX.END_STONE,  bottom: TEX.END_STONE },
   [BlockType.PLANKS]:     { top: TEX.PLANKS,       side: TEX.PLANKS,     bottom: TEX.PLANKS },
+  [BlockType.DIAMOND_ORE]:{ top: TEX.DIAMOND_ORE,  side: TEX.DIAMOND_ORE,bottom: TEX.DIAMOND_ORE },
 };
 
 /** 伪随机数生成器（基于坐标，用于纹理像素变化） */
@@ -311,6 +317,14 @@ function createAtlasCanvas() {
     }
   });
 
+  drawTexture(ctx, TEX.DIAMOND_ORE, (c) => {
+    fillNoisy(c, 102, 112, 116, 13);
+    for (let i = 0; i < 9; i++) {
+      c.fillStyle = i % 3 ? '#47dce1' : '#b6ffff';
+      c.fillRect((hash(i + 31, 17) * 13) | 0, (hash(i + 47, 29) * 13) | 0, 2, 2);
+    }
+  });
+
   return canvas;
 }
 
@@ -343,6 +357,7 @@ export function getBlockColor(type) {
     [BlockType.PORTAL]:     '#7b1fa2',
     [BlockType.END_STONE]:  '#c8c396',
     [BlockType.PLANKS]:     '#aa8246',
+    [BlockType.DIAMOND_ORE]: '#4adce5',
   };
   return colors[type] || '#ff00ff';
 }
@@ -407,6 +422,9 @@ export class Chunk {
     this.blocks = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE * CHUNK_HEIGHT);
     this.mesh = null;
     this.waterMesh = null;
+    this.adMesh = null;
+    this.adEntries = [];
+    this.adConfig = null;
     this.dirty = true;
   }
 
@@ -525,10 +543,52 @@ export class Chunk {
       this.waterMesh.position.set(wx0, 0, wz0);
     }
 
+    this._buildDecals(getWorldBlock);
     this.dirty = false;
   }
 
+  _buildDecals(getWorldBlock) {
+    if (!this.adConfig?.material) return;
+    this.adEntries = selectAdDecals({
+      seed: this.adConfig.seed, dimension: this.adConfig.dimension(),
+      cx: this.cx, cz: this.cz, getBlock: (x,y,z) => {
+        const lx=x-this.cx*CHUNK_SIZE, lz=z-this.cz*CHUNK_SIZE;
+        return lx>=0&&lx<CHUNK_SIZE&&lz>=0&&lz<CHUNK_SIZE ? this.getBlock(lx,y,lz) : getWorldBlock(x,y,z);
+      },
+    });
+    if (!this.adEntries.length) return;
+    const positions=[], normals=[], uvs=[], indices=[];
+    for (const ad of this.adEntries) {
+      const [nx,ny,nz]=ad.face;
+      const center=[ad.x+.5+nx*.506, ad.y+.5+ny*.506, ad.z+.5+nz*.506];
+      const right=ny ? [1,0,0] : nx ? [0,0,-nx] : [nz,0,0];
+      const up=ny>0 ? [0,0,-1] : ny<0 ? [0,0,1] : [0,1,0];
+      const base=positions.length/3;
+      for (const [u,v] of [[0,0],[1,0],[1,1],[0,1]]) {
+        positions.push(...center.map((c,i)=>c+(u-.5)*.46*right[i]+(v-.5)*.28*up[i]));
+        normals.push(nx,ny,nz);uvs.push(u,v);
+      }
+      indices.push(base,base+1,base+2,base,base+2,base+3);
+    }
+    const geometry=new THREE.BufferGeometry();
+    geometry.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));
+    geometry.setAttribute('normal',new THREE.Float32BufferAttribute(normals,3));
+    geometry.setAttribute('uv',new THREE.Float32BufferAttribute(uvs,2));
+    geometry.setIndex(indices);
+    this.adMesh=new THREE.Mesh(geometry,this.adConfig.material);
+  }
+
+  _disposeDecals() {
+    if (this.adMesh) {
+      this.adMesh.geometry.dispose();
+      if (this.adMesh.parent) this.adMesh.parent.remove(this.adMesh);
+      this.adMesh=null;
+    }
+    this.adEntries=[];
+  }
+
   _disposeMesh() {
+    this._disposeDecals();
     if (this.mesh) {
       this.mesh.geometry.dispose();
       if (this.mesh.parent) this.mesh.parent.remove(this.mesh);
@@ -558,6 +618,7 @@ export class World {
     this.treeNoise = new SimplexNoise(seed + 777);
     this.chunks = new Map();
     this.material = null;
+    this.adMaterial = null;
     this.pendingChunks = [];
     this.renderDistance = RENDER_DISTANCE;
     /** 玩家改动的方块差分 key=`wx,wy,wz` → BlockType（含 AIR） */
@@ -565,6 +626,7 @@ export class World {
   }
 
   setDimension(dim) {
+    for (const chunk of this.chunks.values()) chunk._disposeDecals();
     this.dimension = dim || Dim.OVERWORLD;
     // 换维度换噪声相位，地形不同
     const base = this.seed + (dim === Dim.NETHER ? 9001 : dim === Dim.END ? 4242 : 0);
@@ -573,12 +635,16 @@ export class World {
   }
 
   init() {
+    if (this.adMaterial) { this.adMaterial.map.dispose(); this.adMaterial.dispose(); }
     const texture = createBlockTexture();
     this.material = new THREE.MeshLambertMaterial({
       map: texture,
       side: THREE.FrontSide,
       transparent: false,
       depthWrite: true,
+    });
+    this.adMaterial = new THREE.MeshBasicMaterial({
+      map: createAdTexture(), side: THREE.FrontSide, transparent: true, depthWrite: false,
     });
     this.waterMaterial = new THREE.MeshLambertMaterial({
       map: texture,
@@ -590,6 +656,41 @@ export class World {
 
   chunkKey(cx, cz) {
     return `${cx},${cz}`;
+  }
+
+  configureChunkDecals(chunk) {
+    chunk.adConfig = {seed:this.seed,dimension:()=>this.dimension,material:this.adMaterial};
+  }
+
+  refreshAdjacentDecals(cx,cz) {
+    for (const [dx,dz] of [[-1,0],[1,0],[0,-1],[0,1]]) {
+      const chunk=this.chunks.get(this.chunkKey(cx+dx,cz+dz));
+      if (!chunk) continue;
+      const attached=!!chunk.mesh?.parent;
+      chunk._disposeDecals();
+      chunk._buildDecals((x,y,z)=>this.getBlock(x,y,z));
+      if (attached && chunk.adMesh) this.scene.add(chunk.adMesh);
+    }
+  }
+
+  dispose() {
+    for (const chunk of this.chunks.values()) chunk.dispose();
+    this.chunks.clear();
+    this.pendingChunks.length=0;
+    if (this.adMaterial) {
+      this.adMaterial.map?.dispose();
+      this.adMaterial.dispose();
+      this.adMaterial=null;
+    }
+    if (this.material) {
+      this.material.map?.dispose();
+      this.material.dispose();
+      this.material=null;
+    }
+    if (this.waterMaterial) {
+      this.waterMaterial.dispose();
+      this.waterMaterial=null;
+    }
   }
 
   getBlock(wx, wy, wz) {
@@ -614,6 +715,7 @@ export class World {
     const lx = ((wx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
     const lz = ((wz % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
     chunk.setBlock(lx, wy, lz, type);
+    chunk._disposeDecals(); // The old decal cannot linger until the next mesh rebuild.
 
     if (lx === 0) this._markDirty(cx - 1, cz);
     if (lx === CHUNK_SIZE - 1) this._markDirty(cx + 1, cz);
@@ -643,7 +745,7 @@ export class World {
 
   _markDirty(cx, cz) {
     const chunk = this.chunks.get(this.chunkKey(cx, cz));
-    if (chunk) chunk.dirty = true;
+    if (chunk) { chunk.dirty = true; chunk._disposeDecals(); }
   }
 
   // ────────────── Coze 文字立墙（XY 平面，面朝南）──────────────
@@ -850,6 +952,19 @@ export class World {
       }
     }
 
+    // Quota is based on all naturally generated solid terrain; only deep STONE can be replaced.
+    let solidCount=0; const candidates=[];
+    for(let y=0;y<CHUNK_HEIGHT;y++) for(let lz=0;lz<CHUNK_SIZE;lz++) for(let lx=0;lx<CHUNK_SIZE;lx++){
+      const b=chunk.getBlock(lx,y,lz);
+      if(b!==BlockType.AIR&&b!==BlockType.WATER)solidCount++;
+      if(b!==BlockType.STONE)continue;
+      const wx=wx0+lx,wz=wz0+lz;
+      const h=this.noise.fbm(wx*.02,wz*.02,4,2,.5);
+      const surface=Math.max(1,Math.min(CHUNK_HEIGHT-1,Math.floor((h+1)*.5*32+8)));
+      if(y<surface-6)candidates.push({x:wx,y,z:wz});
+    }
+    for(const {x,y,z} of selectDiamondOrePositions({seed:this.seed,cx:chunk.cx,cz:chunk.cz,solidCount,candidates}))
+      chunk.setBlock(x-wx0,y,z-wz0,BlockType.DIAMOND_ORE);
     this._generateTrees(chunk);
   }
 
@@ -938,6 +1053,10 @@ export class World {
         if (chunk.waterMesh) this.scene.remove(chunk.waterMesh);
         chunk.dispose();
         this.chunks.delete(key);
+        this._markDirty(chunk.cx-1,chunk.cz);
+        this._markDirty(chunk.cx+1,chunk.cz);
+        this._markDirty(chunk.cx,chunk.cz-1);
+        this._markDirty(chunk.cx,chunk.cz+1);
       }
     }
 
@@ -950,11 +1069,17 @@ export class World {
       const chunk = new Chunk(cx, cz);
       this.generateChunkData(chunk);
       this.applyEdits(chunk);
+      this.configureChunkDecals(chunk);
       chunk.buildMesh((wx, wy, wz) => this.getBlock(wx, wy, wz), this.material, this.waterMaterial);
       this.chunks.set(key, chunk);
+      this._markDirty(cx-1,cz);
+      this._markDirty(cx+1,cz);
+      this._markDirty(cx,cz-1);
+      this._markDirty(cx,cz+1);
 
       if (chunk.mesh) this.scene.add(chunk.mesh);
       if (chunk.waterMesh) this.scene.add(chunk.waterMesh);
+      if (chunk.adMesh) this.scene.add(chunk.adMesh);
       processed++;
     }
 
@@ -966,6 +1091,7 @@ export class World {
         chunk.buildMesh((wx, wy, wz) => this.getBlock(wx, wy, wz), this.material, this.waterMaterial);
         if (chunk.mesh && !chunk.mesh.parent) this.scene.add(chunk.mesh);
         if (chunk.waterMesh && !chunk.waterMesh.parent) this.scene.add(chunk.waterMesh);
+        if (chunk.adMesh && !chunk.adMesh.parent) this.scene.add(chunk.adMesh);
         rebuilt++;
       }
     }

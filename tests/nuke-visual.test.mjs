@@ -1,0 +1,20 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import * as THREE from 'three';
+import {NukeVisual} from '../js/nuke-visual.js';
+test('projectile interpolates authoritative positions, hides other dimensions and releases meshes',()=>{
+  const scene=new THREE.Scene(),camera=new THREE.PerspectiveCamera();
+  const visual=new NukeVisual(scene,camera);
+  visual.receive({phase:'spawn',id:'a',dimension:'overworld',x:0,y:20,z:0});
+  visual.receive({phase:'update',id:'a',dimension:'overworld',x:10,y:20,z:0});
+  visual.tick(.05,'overworld',true);
+  const mesh=visual.projectiles.get('a').mesh;
+  assert.ok(mesh.position.x>0&&mesh.position.x<10);assert.equal(mesh.visible,true);
+  assert.equal(visual.hand.visible,true);
+  visual.tick(.05,'nether',false);assert.equal(mesh.visible,false);assert.equal(visual.hand.visible,false);
+  let disposed=false;mesh.children[0].geometry.addEventListener('dispose',()=>disposed=true);
+  visual.receive({phase:'end',id:'a'});
+  assert.equal(visual.projectiles.size,0);assert.equal(mesh.parent,null);assert.equal(disposed,true);
+  visual.receive({phase:'spawn',id:'b',dimension:'overworld',x:1,y:20,z:0});visual.clear();
+  assert.equal(visual.projectiles.size,0);assert.equal(visual.hand.visible,false);
+});

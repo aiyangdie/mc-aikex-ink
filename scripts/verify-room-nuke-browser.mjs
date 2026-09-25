@@ -13,16 +13,18 @@ let browser;
 try{
  for(let i=0;i<100&&(!logs.includes('http://127.0.0.1:3040')||!logs.includes('8086'));i++)await sleep(50);
  assert.match(logs,/http:\/\/127\.0\.0\.1:3040/);assert.match(logs,/8086/);
- browser=await chromium.launch({headless:true});
+ browser=await chromium.launch({headless:process.env.MC_BROWSER_HEADLESS==='1'});
  const ctx=await browser.newContext({viewport:{width:1200,height:800}});
- const errors=[];
+ const errors=[];const failures=[];const consoleErrors=[];const httpErrors=[];
+ ctx.on('response',r=>{if(r.status()>=400)httpErrors.push(r.status()+' '+r.url());});
+ ctx.on('requestfailed',r=>failures.push(r.url()+': '+r.failure()?.errorText));
  await ctx.addInitScript(()=>{HTMLCanvasElement.prototype.requestPointerLock=()=>Promise.reject(Error('fallback-test'));});
  await ctx.route('**/js/game.js*',async route=>{
    const response=await route.fetch(),code=await response.text();
    await route.fulfill({response,body:code.replace('const game = new Game();','const game = new Game(); window.__testGame=game;')});
  });
  async function enter(name,room){
-   const page=await ctx.newPage();page.on('pageerror',e=>errors.push(e.message));
+   const page=await ctx.newPage();page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')consoleErrors.push(m.text());});
    await page.goto('http://127.0.0.1:8086');await page.locator('#loadingBar').waitFor({state:'hidden'});
    await page.locator('#playerNameInput').fill(name);
    if(room){await page.locator('#roomCodeInput').fill(room);await page.locator('#btnJoin').click();}
@@ -33,6 +35,7 @@ try{
  const host=await enter('核弹房主');
  const room=await host.evaluate(()=>window.__testGame.net.room);assert.ok(room,logs);
  const victim=await enter('受害者',room);
+ const outsider=await enter('旁观房间');await outsider.locator('#btnEnterRoom').click();
  await host.locator('#btnEnterRoom').click();
  if(await victim.locator('#btnEnterRoom').isVisible())await victim.locator('#btnEnterRoom').click();
  await host.waitForFunction(()=>window.__testGame._online&&window.__testGame.isRunning);
@@ -41,6 +44,8 @@ try{
    const g=window.__testGame;g.player.adminFly=true;g.player.position.set(x,20,80);
    g.net._send({t:'move',x,y:20,z:80,dimension:'overworld',yaw:0,pitch:0});
  },x);
+ await host.bringToFront();await host.mouse.click(600,400);
+ await host.waitForFunction(()=>window.__testGame._fallbackActive);
  await host.mouse.move(500,400);await host.mouse.move(540,400);
  const yaw=await host.evaluate(()=>window.__testGame.player.yaw);
  assert.notEqual(yaw,0,'fallback hover must rotate without button');
@@ -56,26 +61,106 @@ try{
  await host.locator('#roomChatLog').getByText('<img src=x onerror=alert(1)>',{exact:false}).waitFor();
  assert.equal(await host.locator('#roomChatLog img').count(),0,'remote chat remains text');
  await host.mouse.click(600,400);await host.waitForFunction(()=>window.__testGame._fallbackActive);
- await host.evaluate(()=>{window.__testGame.__places=0;window.__testGame._secondaryAction=()=>{window.__testGame.__places++};});
+ await host.evaluate(()=>{window.__testGame.__realSecondary=window.__testGame._secondaryAction;window.__testGame.__places=0;window.__testGame._secondaryAction=()=>{window.__testGame.__places++};});
  await host.mouse.move(600,400);await host.mouse.down({button:'right'});
  assert.equal(await host.evaluate(()=>window.__testGame.__places),1,'right button places immediately without drag');
  await host.mouse.move(610,410);await host.mouse.up({button:'right'});
  assert.equal(await host.evaluate(()=>window.__testGame.__places),1,'right button action never duplicates on release');
+ await host.evaluate(()=>{window.__testGame._secondaryAction=window.__testGame.__realSecondary;});
  await host.keyboard.press('t');await host.locator('#roomChatInput').waitFor({state:'visible'});
+ await sleep(550); // Server chat flood protection is 500 ms.
+ const outsiderEditsBefore=await outsider.evaluate(()=>window.__testGame.world.edits.size);
+ const editsBefore=await host.evaluate(()=>window.__testGame.world.edits.size);
  const casterHpBefore=await host.evaluate(()=>window.__testGame.player.hp);
  await host.locator('#roomChatInput').fill('Maydaymayday');await host.locator('#roomChatInput').press('Enter');
+ await host.waitForFunction(()=>window.__testGame.nukeUnlocked);console.log('PASS grant only');
+ assert.equal(await victim.locator('#deathScreen').isVisible(),false,'grant does not detonate');
+ assert.equal(await host.evaluate(()=>window.__testGame.world.edits.size),editsBefore);
+ await host.mouse.click(600,400);await host.keyboard.press('n');
+ await host.waitForFunction(()=>window.__testGame.nukeVisual.hand.visible);
+ await mkdir('docs/verification',{recursive:true});await host.screenshot({path:'docs/verification/handheld-nuke-held.png'});
+ // Observe protocol before the unchanged production handler applies terrain edits.
+ await host.evaluate(()=>{
+   const g=window.__testGame,receive=g.net._onMsg;
+   g.__nukeEvidence={spawns:[],impacts:[],errors:[]};
+   g.net._onMsg=function(msg){
+     if(msg.t==='nuke_projectile'&&msg.phase==='spawn')g.__nukeEvidence.spawns.push(msg);
+     if(msg.t==='err')g.__nukeEvidence.errors.push(msg.msg);
+     if(msg.t==='nuke')g.__nukeEvidence.impacts.push({origin:msg.origin,dimension:msg.dimension,
+       changed:msg.edits.filter(([x,y,z,b])=>g.world.getBlock(x,y,z)!==b)});
+     return receive.call(this,msg);
+   };
+ });
+ await host.mouse.click(600,400,{button:'right'});
+ await host.waitForFunction(()=>window.__testGame.nukeVisual.projectiles.size>0);
+ await host.screenshot({path:'docs/verification/handheld-nuke-flight.png'});
  await victim.locator('#deathScreen').waitFor({state:'visible',timeout:12000});
  assert.match(await victim.locator('#deathReason').textContent(),/核弹/);
  await host.waitForFunction(()=>window.__testGame._netBossState?.hp===0);
+ await victim.screenshot({path:'docs/verification/handheld-nuke-death.png'});
+ assert.match(await host.locator('#nukeCooldown').textContent(),/房间冷却/);
+ assert.equal(await host.evaluate(()=>window.__testGame.nukeUnlocked),true);
+ assert.equal(await outsider.evaluate(()=>window.__testGame.world.edits.size),outsiderEditsBefore);
+ assert.equal(await outsider.locator('#deathScreen').isVisible(),false);
  assert.ok(await host.locator('#nukeFlash').count(),'blast flash overlay visible in DOM');
  const state=await host.evaluate(()=>({hp:window.__testGame.player.hp,edits:window.__testGame.world.edits.size}));
- assert.equal(state.hp,casterHpBefore,'nuke must not damage its caster');assert.ok(state.edits>0);
- await mkdir('docs/verification',{recursive:true});await host.screenshot({path:'docs/verification/room-nuke-local.png'});
+ assert.equal(state.hp,casterHpBefore,'nuke must not damage its caster');
+ assert.ok(state.edits>editsBefore,'nuke must add edits beyond procedural baseline');
+ const impact=await host.evaluate(()=>window.__testGame.__nukeEvidence.impacts[0]);
+ assert.equal(impact.dimension,'overworld');
+ const changedNearImpact=impact.changed.filter(([x,y,z,b])=>b===0&&Math.hypot(x-impact.origin.x,y-impact.origin.y,z-impact.origin.z)<=12);
+ assert.ok(changedNearImpact.length>0,'authoritative impact must remove previously solid blocks within crater radius');
+ assert.equal(await host.evaluate(blocks=>blocks.every(([x,y,z,b])=>window.__testGame.world.getBlock(x,y,z)===b),changedNearImpact),true);
+ await host.waitForFunction(()=>window.__testGame.nukeVisual.projectiles.size===0);
+ // Exercise both the real second right click and a direct intent rejected by the server.
+ await host.bringToFront();await host.mouse.click(600,400,{button:'right'});
+ await host.waitForFunction(()=>document.getElementById('saveToast').textContent==='核弹冷却中');
+ assert.equal(await host.evaluate(()=>window.__testGame.nukeVisual.projectiles.size),0);
+ await host.evaluate(()=>window.__testGame.net._send({t:'nuke_throw'}));
+ await host.waitForFunction(()=>window.__testGame.__nukeEvidence.errors.some(text=>/冷却/.test(text)));
+ await sleep(250);
+ const denied=await host.evaluate(()=>({spawns:window.__testGame.__nukeEvidence.spawns.length,impacts:window.__testGame.__nukeEvidence.impacts.length,
+   edits:window.__testGame.world.edits.size,unlocked:window.__testGame.nukeUnlocked,projectiles:window.__testGame.nukeVisual.projectiles.size}));
+ assert.deepEqual(denied,{spawns:1,impacts:1,edits:state.edits,unlocked:true,projectiles:0});
+ console.log('PASS crater delta / actual changed impact blocks / rejected second throw', {baseline:editsBefore,edits:state.edits,changedNearImpact:changedNearImpact.length,origin:impact.origin});
+ // Explicit elevated downward view, not the near-camera launch direction.
+ await host.evaluate(origin=>{const p=window.__testGame.player;p.position.set(origin.x,origin.y+16,origin.z+16);p.yaw=0;p.pitch=-Math.PI/4;},impact.origin);
+ await sleep(250);await host.screenshot({path:'docs/verification/room-nuke-local.png'});
  await host.locator('#btnTerrainReset').waitFor({state:'visible'});
  host.once('dialog',dialog=>dialog.accept());await host.locator('#btnTerrainReset').click();
  await host.waitForFunction(()=>window.__testGame.world.edits.size===0,null,{timeout:12000});
  await host.screenshot({path:'docs/verification/room-reset-local.png'});
- assert.deepEqual(errors,[]);
+ await host.waitForFunction(()=>window.__testGame._netBossState?.hp>0,null,{timeout:70000});
+ console.log('PASS Boss respawn after real 60 second wait');
+ await host.bringToFront();await host.mouse.click(600,400);await host.keyboard.press('1');
+ const ad=await host.evaluate(()=>{
+   const g=window.__testGame;const a=[...g.world.chunks.values()].flatMap(c=>c.adEntries||[]).find(a=>a.face[1]===1&&Math.abs(a.x-80)<25&&Math.abs(a.z-80)<25);
+   if(!a)throw Error('No nearby exposed ad');g.player.position.set(a.x+.5,a.y+3-g.player.eyeHeight,a.z+.5);g.player.pitch=-Math.PI/2+.01;g.player.yaw=0;return a;
+ });
+ await host.waitForFunction(a=>{const t=window.__testGame.player.targetBlock;return t&&t.x===a.x&&t.y===a.y&&t.z===a.z;},ad);
+ await host.screenshot({path:'docs/verification/handheld-ad-close.png'});
+ await host.mouse.click(600,400);
+ await host.waitForFunction(a=>window.__testGame.world.getBlock(a.x,a.y,a.z)===0,ad);
+ await victim.waitForFunction(a=>window.__testGame.world.getBlock(a.x,a.y,a.z)===0,ad);
+ await host.waitForFunction(a=>![...window.__testGame.world.chunks.values()].some(c=>c.adEntries?.some(b=>b.x===a.x&&b.y===a.y&&b.z===a.z)),ad);
+ await host.screenshot({path:'docs/verification/handheld-ad-mined.png'});
+ host.once('dialog',d=>d.accept());await host.locator('#btnTerrainReset').click();
+ await host.waitForFunction(a=>[...window.__testGame.world.chunks.values()].some(c=>c.adEntries?.some(b=>b.x===a.x&&b.y===a.y&&b.z===a.z)),ad);
+ await host.screenshot({path:'docs/verification/handheld-ad-reset.png'});
+ console.log('PASS attached ad mined, peer synced, reset restored',ad);
+ await host.mouse.click(600,400);await host.keyboard.press('6');
+ const bombCount=await host.evaluate(()=>window.__testGame.inventory.countOf(108));
+ await host.mouse.click(600,400,{button:'right'});
+ await host.waitForFunction(()=>window.__testGame.bombs.list.length>0);
+ assert.equal(await host.evaluate(()=>window.__testGame.inventory.countOf(108)),bombCount-1);
+ await host.waitForFunction(()=>window.__testGame.bombs.list.length===0);
+ console.log('PASS ordinary bomb equipped, consumed, spawned and exploded');
+ await host.reload();await host.locator('#loadingBar').waitFor({state:'hidden'});
+ await host.locator('#playerNameInput').fill('重新连接');await host.locator('#roomCodeInput').fill(room);await host.locator('#btnJoin').click();
+ await host.waitForFunction(()=>window.__testGame._online);
+ assert.equal(await host.evaluate(()=>window.__testGame.nukeUnlocked),false);
+ assert.deepEqual(errors,[]);console.log('NETWORK FAILURES',failures);console.log('CONSOLE ERRORS',consoleErrors);console.log('HTTP ERRORS',httpErrors);
+ assert.deepEqual(consoleErrors,[]);assert.deepEqual(httpErrors,[]);
  console.log('PASS local browser: mouse hover, chat, nuke, victim death, Boss death, crater, host reset',state);
 }finally{
  if(browser)await browser.close();for(const child of [backend,staticServer])child.kill('SIGTERM');

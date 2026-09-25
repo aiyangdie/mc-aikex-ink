@@ -24,6 +24,7 @@ import { summarizeDrops, buildMobDrops } from './loot.js?v=groundfix9';
 import { apiUrl } from './config.js?v=groundfix9';
 import { MistBoss } from './mist-boss.js';
 import { shouldReviveSoloBoss,scheduleSoloRespawn } from './boss-respawn.js';
+import { NukeVisual } from './nuke-visual.js';
 import { RoomChat } from './room-chat.js';
 import { mouseLookDelta } from './mouse-look.js';
 import { findStandY } from './boss-navigation.js';
@@ -786,6 +787,10 @@ export class Game {
     this._terrainRevision = 0;
     this._roomHostId = null;
     this._chatOpen = false;
+    this.nukeUnlocked = false;
+    this.nukeEquipped = false;
+    this.nukeCooldownUntil = 0;
+    this._nukeCooldownDeadline = 0;
     this._hostWaiting = false; // 已建房、仍在大厅等待
     this._pendingJoinMsg = null;
     this._roomPollTimer = null;
@@ -812,6 +817,8 @@ export class Game {
     this._initRenderer();
     this._initScene();
     this._initPlayer();
+    this.nukeVisual = new NukeVisual(this.scene, this.camera);
+    this._initNukeUI();
     this._initHighlight();
     this._initHotbar();
     if (this.isMobile) this._initMobileHotbar();
@@ -892,6 +899,7 @@ export class Game {
         const chunk = await this._createChunk(cx, cz);
         if (chunk.mesh) this.scene.add(chunk.mesh);
         if (chunk.waterMesh) this.scene.add(chunk.waterMesh);
+        if (chunk.adMesh) this.scene.add(chunk.adMesh);
         generated++;
         this.ui.loadingFill.style.width = `${(generated / needed * 100) | 0}%`;
 
@@ -982,6 +990,7 @@ export class Game {
       chunk = this._createChunk(cx, cz);
       if (chunk.mesh) this.scene.add(chunk.mesh);
       if (chunk.waterMesh) this.scene.add(chunk.waterMesh);
+      if (chunk.adMesh) this.scene.add(chunk.adMesh);
       return;
     }
     if (chunk.mesh) this.scene.remove(chunk.mesh);
@@ -995,6 +1004,7 @@ export class Game {
     );
     if (chunk.mesh) this.scene.add(chunk.mesh);
     if (chunk.waterMesh) this.scene.add(chunk.waterMesh);
+    if (chunk.adMesh) this.scene.add(chunk.adMesh);
   }
 
   /** 创建区块 */
@@ -1005,8 +1015,10 @@ export class Game {
     const chunk = new Chunk(cx, cz);
     this.world.generateChunkData(chunk);
     this.world.applyEdits(chunk);
+    this.world.configureChunkDecals(chunk);
     chunk.buildMesh((wx, wy, wz) => this.world.getBlock(wx, wy, wz), this.world.material, this.world.waterMaterial);
     this.world.chunks.set(key, chunk);
+    this.world.refreshAdjacentDecals(cx, cz);
     return chunk;
   }
 
@@ -1157,6 +1169,7 @@ export class Game {
       slot.addEventListener('touchstart', (e) => {
         e.preventDefault();
         this.selectedSlot = i;
+        this.nukeEquipped=false;this._updateNukeHUD();
         this._updateHotbar();
       });
       mobileHotbar.appendChild(slot);
@@ -1214,6 +1227,50 @@ export class Game {
     if(accepted)this.net.sendTerrainReset();
   }
 
+  _initNukeUI() {
+    document.getElementById('nukeEquip')?.addEventListener('click',()=>this._toggleNuke());
+    document.getElementById('nukeThrow')?.addEventListener('click',()=>this._secondaryAction());
+    this._updateNukeHUD();
+  }
+  _toggleNuke() {
+    if(!this._online||!this.nukeUnlocked||this._dead||this._chatOpen||this.adminPanel?.open||!this._controlsActive())return;
+    this.nukeEquipped=!this.nukeEquipped;
+    if(this.nukeEquipped)this.combat?.setMode('build');
+    this._updateNukeHUD();
+  }
+  _resetNuke() {
+    this.nukeUnlocked=false;this.nukeEquipped=false;this.nukeCooldownUntil=0;this._nukeCooldownDeadline=0;
+    this.nukeVisual?.clear();this._updateNukeHUD();
+  }
+  _applyNukeState(msg) {
+    this.nukeUnlocked=msg.nukeUnlocked===true;
+    if(!this.nukeUnlocked)this.nukeEquipped=false;
+    this._setNukeCooldown(msg.nukeCooldownUntil,msg.serverNow);
+    this.nukeVisual?.clear();
+    if(msg.nukeProjectile)this.nukeVisual?.receive({...msg.nukeProjectile,phase:'spawn'});
+    this._updateNukeHUD();
+  }
+  _setNukeCooldown(until,serverNow) {
+    this.nukeCooldownUntil=Number.isFinite(until)?until:0;
+    // Never gate intent against an uncalibrated wall clock. Legacy/missing
+    // timestamps fail open locally; the server still adjudicates every throw.
+    const remaining=Number.isFinite(serverNow)?Math.max(0,this.nukeCooldownUntil-serverNow):0;
+    this._nukeCooldownDeadline=performance.now()+remaining;
+  }
+  _nukeRemaining() {return Math.max(0,(this._nukeCooldownDeadline||0)-performance.now());}
+  _updateNukeHUD() {
+    const hud=document.getElementById('nukeHud');if(!hud)return;
+    hud.hidden=!(this._online&&this.nukeUnlocked&&this._nukeHudShown&&!this._dead);
+    if(this.combat?.armed)this.nukeEquipped=false;
+    const equip=document.getElementById('nukeEquip');
+    equip.setAttribute('aria-pressed',String(this.nukeEquipped));
+    equip.textContent=this.nukeEquipped?'核弹 ∞ · 已装备 [N]':'核弹 ∞ · 装备 [N]';
+    const remaining=Math.max(0,Math.ceil(this._nukeRemaining()/1000));
+    document.getElementById('nukeCooldown').textContent=remaining?'房间冷却 '+Math.floor(remaining/60)+':'+String(remaining%60).padStart(2,'0'):'可投掷 · 右键';
+    const button=document.getElementById('nukeThrow');button.hidden=!this.isMobile||!this.nukeEquipped;
+    button.disabled=remaining>0||this._chatOpen;
+  }
+
   /** 绑定事件监听 */
   _initEvents() {
     // 键盘事件（桌面端 + 移动端外接键盘通用）
@@ -1224,6 +1281,8 @@ export class Game {
       if(e.code==='KeyT'&&this._online&&this.isRunning){e.preventDefault();this._openChat();return;}
       if (e.code === 'Escape' && this._fallbackActive) { this._pauseFallback(); return; }
       if (!this._controlsActive()) return;
+      if(e.code==='KeyN'&&!e.repeat){e.preventDefault();this._toggleNuke();return;}
+      if(['KeyQ','KeyB'].includes(e.code)){this.nukeEquipped=false;this._updateNukeHUD();}
       this.player.keys[e.code] = true;
 
       // 数字键选择热栏 1-9
@@ -1231,6 +1290,7 @@ export class Game {
         const idx = parseInt(e.code.charAt(5), 10) - 1;
         if (idx >= 0 && idx < 9) {
           this.selectedSlot = idx;
+        this.nukeEquipped=false;this._updateNukeHUD();
           this._updateHotbar();
         }
       }
@@ -1304,8 +1364,10 @@ export class Game {
 
       if (e.deltaY > 0) {
         this.selectedSlot = (this.selectedSlot + 1) % 9;
+        this.nukeEquipped=false;this._updateNukeHUD();
       } else {
         this.selectedSlot = (this.selectedSlot - 1 + 9) % 9;
+        this.nukeEquipped=false;this._updateNukeHUD();
       }
       this._updateHotbar();
     });
@@ -1453,6 +1515,12 @@ export class Game {
 
   /** 右键：食物则吃；炸弹投放；否则放置 */
   _secondaryAction() {
+    if(this._dead||this._chatOpen||this.adminPanel?.open||/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName)||document.activeElement?.isContentEditable)return;
+    if(this.nukeEquipped){
+      if(!this._online||!this.nukeUnlocked||!this._controlsActive()||this.player.hp<=0||performance.now()<(this.player.lockedUntil||0))return;
+      if(this._nukeRemaining()>0){this._showSaveToast('核弹冷却中');return;}
+      this.net._send({t:'nuke_throw'});return;
+    }
     if (this.player.hp <= 0 || performance.now() < (this.player.lockedUntil || 0) || this.combat?.armed) return;
     if (!this.isRunning) return;
     const type = this.inventory.selectedType(this.selectedSlot);
@@ -1492,6 +1560,7 @@ export class Game {
       const foodSlot = this.inventory.findFoodSlot?.() ?? -1;
       if (foodSlot >= 0) {
         this.selectedSlot = foodSlot;
+        this.nukeEquipped=false;this._updateNukeHUD();
         this._updateHotbar();
         this._showSaveToast(`已选中${getItemName(this.inventory.selectedType(foodSlot))} · 再按 F 吃`);
       } else {
@@ -1519,6 +1588,7 @@ export class Game {
     const slot = this.inventory.findSlot?.(type) ?? -1;
     if (slot < 0) return false;
     this.selectedSlot = slot;
+        this.nukeEquipped=false;this._updateNukeHUD();
     this._updateHotbar();
     return true;
   }
@@ -1741,6 +1811,7 @@ export class Game {
         const chunk = this._createChunk(pcx + dx, pcz + dz);
         if (chunk?.mesh) this.scene.add(chunk.mesh);
         if (chunk?.waterMesh) this.scene.add(chunk.waterMesh);
+        if (chunk?.adMesh) this.scene.add(chunk.adMesh);
       }
     }
 
@@ -2226,6 +2297,18 @@ export class Game {
 
   /** 联机事件绑定 */
   _bindNet() {
+    this.net.on('joined', msg => {this._resetNuke();this._applyNukeState(msg);});
+    this.net.on('sync', msg => this._applyNukeState(msg));
+    this.net.on('nuke_granted', msg => {
+      if(Number.isFinite(msg.nukeCooldownUntil))this._setNukeCooldown(msg.nukeCooldownUntil,msg.serverNow);
+      this.nukeUnlocked=true;this._updateNukeHUD();
+      this.roomChat?.append('系统','已领取无限核弹；点击核弹或按 N 装备，右键投掷');
+      this._showSaveToast('已领取无限核弹 · N 装备');
+    });
+    this.net.on('nuke_projectile', msg => {
+      if(Number.isFinite(msg.cooldownUntil))this._setNukeCooldown(msg.cooldownUntil,msg.serverNow);
+      this.nukeVisual?.receive(msg);this._updateNukeHUD();
+    });
     this.net.on('combat', msg => {
       this.combat?.receive(msg);
       if(msg.id===this.net.id&&msg.hp<=0&&msg.cause==='nuke'){this._lastDamageBy='nuke';this._showDeathScreen();}
@@ -2314,6 +2397,7 @@ export class Game {
       this._refreshRoomList();
     });
     this.net.on('close', () => {
+      this._resetNuke();
       this.roomChat?.hide();this._chatOpen=false;
       if (this._online || this._hostWaiting) {
         this._clearMistBoss();
@@ -2330,6 +2414,7 @@ export class Game {
       }
     });
     this.net.on('err', (msg) => {
+      if(this.nukeEquipped)this._showSaveToast(msg);
       this._setOnlineStatus(msg, true);
     });
     this.net.on('mobs', (msg) => {
@@ -2479,20 +2564,26 @@ export class Game {
     const edits=msg.editsByDimension||{overworld:msg.edits||[]};
     for(const dim of [Dim.OVERWORLD,Dim.NETHER,Dim.END])this._dimEdits[dim]=SaveManager.arrayToEdits(edits[dim]||[]);
     this.world.edits=this._dimEdits[this.dimension];
-    for (const [, chunk] of this.world.chunks) {
+    // Restore every chunk before any mesh consults neighboring blocks.
+    for (const chunk of this.world.chunks.values()) {
+      chunk._disposeDecals();
       this.world.generateChunkData(chunk);
       this.world.applyEdits(chunk);
       chunk.dirty = true;
+    }
+    for (const chunk of this.world.chunks.values()) {
       if (chunk.mesh) this.scene.remove(chunk.mesh);
       if (chunk.waterMesh) this.scene.remove(chunk.waterMesh);
       chunk.buildMesh((wx,wy,wz)=>this.world.getBlock(wx,wy,wz),this.world.material,this.world.waterMaterial);
       if (chunk.mesh) this.scene.add(chunk.mesh);
       if (chunk.waterMesh) this.scene.add(chunk.waterMesh);
+      if (chunk.adMesh) this.scene.add(chunk.adMesh);
     }
   }
 
   /** 用房间差分覆盖本地世界 */
   _applyRoomState(msg) {
+    this._applyNukeState(msg);
     if (this.combat) {
       this.combat.mage.clear();
       for (const spell of [...(msg.spells?.projectiles || []), ...(msg.spells?.fires || [])]) this.combat.mage.receive(spell);
@@ -2709,6 +2800,7 @@ export class Game {
           mobs: snap.mobs,
           boss: snap.boss,dragonKilled:snap.dragonKilled,
           self: snap.self,
+          serverNow:snap.serverNow,nukeUnlocked:snap.nukeUnlocked,nukeCooldownUntil:snap.nukeCooldownUntil,nukeProjectile:snap.nukeProjectile,
           players: snap.players,
           id: this.net.id,
           color: this.net.color,
@@ -2935,6 +3027,7 @@ export class Game {
   }
 
   _showGameUI(show) {
+    this._nukeHudShown=show;this._updateNukeHUD();
     const display = show ? 'flex' : 'none';
     this.ui.crosshair.style.display = show ? 'block' : 'none';
     this.ui.selectedBlockName.style.display = show ? 'block' : 'none';
@@ -3117,6 +3210,8 @@ export class Game {
       );
     }
 
+    this._updateNukeHUD();
+    this.nukeVisual?.tick(dt,this.dimension,this.nukeEquipped&&this._controlsActive()&&!this._chatOpen);
     // 渲染
     this.renderer.render(this.scene, this.camera);
 

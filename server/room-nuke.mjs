@@ -9,16 +9,27 @@ export function craterCells(origin,radius=12,height=48){
   if((x-origin.x)**2+(z-origin.z)**2+(y-origin.y)**2<=radius**2)cells.push([x,y,z,0]);
  return cells;
 }
-export function resolveNuke(room,caster,now=Date.now()){
- if(!room||!caster||!Number.isFinite(now)||!caster.active||caster.hp<=0||
-   ![...room.peers.values()].includes(caster)||now-(room.lastNukeAt||0)<300_000&&room.lastNukeAt)return null;
- const dimension=caster.dimension||'overworld';
- const origin={x:caster.x,y:caster.y,z:caster.z};
+export function validNukeOrigin(origin){
+ return origin&&[origin.x,origin.y,origin.z].every(Number.isFinite)&&
+  Math.abs(origin.x)<=4096&&Math.abs(origin.z)<=4096&&origin.y>=0&&origin.y<48;
+}
+// Internal settlement API: impact comes from server simulation, never a network payload.
+export function resolveNuke(room,caster,now=Date.now(),impact){
+ if(!room||!caster||!Number.isFinite(now)||!impact||
+   !['overworld','nether','end'].includes(impact.dimension)||!validNukeOrigin(impact.origin))return null;
+ const pending=room.nukeProjectile;
+ const reserved=pending&&pending.ownerId===caster.id&&pending.startedAt===room.lastNukeAt;
+ if(!reserved&&(!caster.active||!(caster.hp>0)||![...room.peers.values()].includes(caster)||
+   (room.lastNukeAt&&now-room.lastNukeAt<300_000)))return null;
+ const dimension=impact.dimension,origin={...impact.origin};
  const edits=craterCells(origin);
  if(!edits.length||!room.terrain.applyBatch(edits,dimension))return null;
- room.lastNukeAt=now;room.terrainRevision++;
- caster.protectedUntil=Math.max(caster.protectedUntil||0,now+3000);
- for(const peer of room.peers.values())if(peer!==caster){peer.hp=0;peer.manualRespawn=true;peer.deadUntil=0;}
+ if(!reserved)room.lastNukeAt=now;
+ room.terrainRevision++;
+ for(const peer of room.peers.values()){
+  if(peer.id===caster.id)peer.protectedUntil=Math.max(peer.protectedUntil||0,now+3000);
+  else {peer.hp=0;peer.manualRespawn=true;peer.deadUntil=0;}
+ }
  for(const mob of room.mobs.values()){mob.alive=false;mob.hp=0;}
  room.mobs.clear();room.dragonKilled=true;room.boss.kill(now);room.touch();
  return {casterId:caster.id,dimension,origin,sequence:room.terrainRevision,edits};
