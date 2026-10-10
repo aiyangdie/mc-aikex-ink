@@ -38,6 +38,8 @@ node server.js
 
 服务器权威、贴地/寻路/卡住与调试约定见 [docs/WORLD_SIM.md](docs/WORLD_SIM.md)。
 
+游戏内可打开「生物实验室」拼接部件、调整身体比例与技能参数，并将模板发布到服务器共享目录。所有玩家可浏览和重复部署；创建者的浏览器保管模板管理凭证，用于修改/删除。联机实例由服务器运行，服务重启后可从仍保留的模板重新部署；技能使用受限组件，不执行用户脚本。
+
 ## 三人协作
 
 见 [CONTRIBUTING.md](CONTRIBUTING.md)。
@@ -80,7 +82,7 @@ MIT — 见 [LICENSE](LICENSE)
 
 ### 本地运行与验证
 
-在 server 目录运行 npm ci，然后 npm run dev，浏览器打开 http://127.0.0.1:3040 。开发模式同时提供静态页与 WebSocket；生产 npm start 的静态资源配置保持不变。
+在仓库根目录运行 `pnpm dev`，浏览器打开 http://127.0.0.1:3040。根目录开发命令会启动 server 开发入口，同时提供游戏静态资源、模板 REST API 和 WebSocket；服务器依赖未安装时，先运行 `pnpm install --dir server`。生产 `npm start` 的静态资源配置保持不变。
 
 运行 npm test 检查伤害、射速、最近命中、死亡、重生、保护、遮挡距离、跨维度隔离及无效输入。启动本地服务后，npm run test:online 用两个真实 WebSocket 客户端测试完整击杀/重生、火球/持续燃烧/5 秒消失、快照与闪现冷却流程。
 
@@ -104,7 +106,7 @@ MIT — 见 [LICENSE](LICENSE)
 - 模型授权来源说明见 `assets/models/README.md`；Three.js 固定版本随仓库提供，浏览器不依赖外部 CDN。
 
 验证：根目录 `npm ci --ignore-scripts`、`npm test`；`npm ci --prefix server`、`npm test --prefix server`。
-联调：启动 `node server/server.js` 后运行根目录 `npm run dev`，打开 `http://127.0.0.1:8086`。
+联调：运行根目录 `pnpm dev`，打开 `http://127.0.0.1:3040`。
 浏览器回归：上述两个本地服务启动后运行 `node scripts/verify-boss-browser.mjs`（需要 Playwright Chromium）；截图存 `docs/verification/`。
 
 法师协议：mode 切换 build/ak/mage；fireball 上报 end 与 ground，服务器广播带 impact 的飞行事件，落地广播带 expires 的 fire；blink 上报 to，接受后广播 combat(teleport=true)。joined/sync 的 spells 包含尚未到期的火球/火区。与原有地形验证边界一致，火球落点与闪现路径碰撞来自客户端；服务端限制距离、职业、生命状态与冷却，尚不独立验证体素遮挡。

@@ -7,6 +7,7 @@ import { BlockType, isSolid, Dim } from './voxel.js?v=groundfix9';
 import { ItemType } from './items.js?v=groundfix9';
 import { buildMobDrops } from './loot.js?v=groundfix9';
 import { createBrain, tickBrain, forceFlee } from './mob-brain.js';
+import { normalizeCreatureBlueprint, creatureCollisionBounds, CREATURE_LIMITS } from './creature-blueprint.js';
 
 const SPAWN_RADIUS = 28;
 const MIN_SPAWN_DIST = 4;
@@ -35,7 +36,19 @@ export const CritterDefs = {
 
 class Critter {
   constructor(scene, world, kind, x, y, z, opts = {}) {
-    const def = CritterDefs[kind] || CritterDefs.pig;
+    const validation = opts.creature ? normalizeCreatureBlueprint(opts.creature) : null;
+    this.customCreature = validation?.ok ? validation.value : null;
+    const creatureBounds = this.customCreature ? creatureCollisionBounds(this.customCreature) : null;
+    const def = this.customCreature
+      ? {
+          name: this.customCreature.name,
+          hp: this.customCreature.hp,
+          w: creatureBounds.width,
+          h: creatureBounds.height,
+          color: Number.parseInt(this.customCreature.color.slice(1), 16),
+          speed: this.customCreature.speed,
+        }
+      : (CritterDefs[kind] || CritterDefs.pig);
     this.def = def;
     this.kind = kind;
     this.scene = scene;
@@ -105,6 +118,22 @@ class Critter {
   }
 
   _buildModel(def) {
+    if (this.customCreature) {
+      const { body, parts } = this.customCreature;
+      for (const part of parts) {
+        const mesh = new THREE.Mesh(
+          new THREE.BoxGeometry(
+            body.width * part.width,
+            body.height * part.height,
+            body.depth * part.depth
+          ),
+          new THREE.MeshLambertMaterial({ color: part.color })
+        );
+        mesh.position.set(part.x * body.width, part.y * body.height, part.z * body.depth);
+        this.group.add(mesh);
+      }
+      return;
+    }
     const mat = new THREE.MeshLambertMaterial({ color: def.color });
     const body = new THREE.Mesh(
       new THREE.BoxGeometry(def.w * 0.95, def.h * 0.55, def.w * 1.1),
@@ -233,6 +262,7 @@ class Critter {
 
   takeDamage(amount = 3, knockDir = null, knockStr = 7) {
     if (this.dead) return null;
+    if (this._shieldTimer > 0) amount = Math.max(1, Math.ceil(amount / 2));
     this.hp -= amount;
     this.hurtTimer = 0.35;
     this.state = 'flee';
@@ -256,16 +286,17 @@ class Critter {
       this.dead = true;
       this._syncHpLabel();
       if (this.label) this.label.style.display = 'none';
-      return { dead: true, drops: buildMobDrops(this.kind) };
+      return { dead: true, drops: this.customCreature ? [] : buildMobDrops(this.kind) };
     }
     return { dead: false, drops: [] };
   }
 
-  applyNetPose(x, y, z, yaw, hp, state) {
+  applyNetPose(x, y, z, yaw, hp, state, shielded = false) {
     this.position.set(x, y, z);
     if (yaw != null) { this.rotation = yaw; this.targetRotation = yaw; }
     if (hp != null) { this.hp = hp; this._syncHpLabel(); }
     if (state) this.state = state;
+    this.shielded = !!shielded;
     this.group.position.set(x, y, z);
     this.group.rotation.y = this.rotation;
   }
@@ -290,7 +321,7 @@ class Critter {
     this.label.style.transform = `translate(${x}px,${y}px) translate(-50%,-100%)`;
   }
 
-  update(dt, spawnCenter) {
+  update(dt, spawnCenter, camera = null, game = null) {
     if (this.dead) return;
     dt = Math.min(dt, 0.1);
     // 暂停时仍把渲染模型收回物理锚点，避免把跳跃/击退的半空帧冻结在屏幕上。
@@ -303,9 +334,11 @@ class Critter {
       for (const { mat, hex } of this._baseMats) {
         mat.color.setHex(this.hurtTimer > 0 ? 0xff4444 : hex);
       }
+      this._shieldTimer = Math.max(0, (this._shieldTimer || 0) - dt);
     }
     if (this._netDriven) {
       this.bobPhase += dt * (this.state === 'idle' ? 2 : 6);
+      for (const { mat, hex } of this._baseMats) mat.color.setHex(this.shielded ? 0x74c7bd : this.hurtTimer > 0 ? 0xff4444 : hex);
       const bob = this.state !== 'idle' ? Math.sin(this.bobPhase) * 0.02 : 0;
       this.group.position.set(this.position.x, this.position.y + bob, this.position.z);
       this.group.rotation.y = this.rotation;
@@ -345,6 +378,14 @@ class Critter {
     this.bobPhase += dt * (this.state === 'idle' ? 2 : 6);
 
     // Offline: shared mob-brain + A*. Online puppets return earlier (_netDriven).
+    const target = this.customCreature ? camera?.position : null;
+    const targetDistance = target ? Math.hypot(target.x - this.position.x, target.z - this.position.z) : Infinity;
+    if (this.customCreature?.behavior === 'aggressive' && targetDistance >= 18 && this._brain.state === 'chase') {
+      this._brain.state = 'wander';
+      this._brain.stateTimer = 1;
+      this._brain.path = [];
+      this._brain.goal = null;
+    }
     const out = tickBrain(this._brain, {
       id: this.id,
       x: this.position.x,
@@ -357,11 +398,45 @@ class Critter {
       world: this.world,
       leash: { x: spawnCenter.x, z: spawnCenter.z, r: WANDER_RANGE },
       navOpts: this._navOpts,
+      chaseTarget: this.customCreature?.behavior === 'aggressive' && targetDistance < 18
+        ? { x: target.x, y: target.y, z: target.z }
+        : null,
+      fleeFrom: this.customCreature?.behavior === 'shy' && targetDistance < 8
+        ? { x: target.x, z: target.z }
+        : null,
     });
     this.position.set(out.x, out.y, out.z);
     this.state = out.state;
     this._stuckTime = out.stuckTime || 0;
     this.targetRotation = out.yaw;
+    if (this.customCreature && target && !game?._online && !game?._dead) {
+      this.customCreature.skills.forEach((skill, index) => {
+        this._skillCooldowns ||= [];
+        if (targetDistance > skill.range || performance.now() < (this._skillCooldowns[index] || 0)) return;
+        if (skill.type === 'shield') {
+          this._shieldTimer = 1;
+          this._skillCooldowns[index] = performance.now() + skill.cooldown * 1000;
+          return;
+        }
+        for (const { mat, hex } of this._baseMats) mat.color.setHex(this._shieldTimer > 0 ? 0x74c7bd : this.hurtTimer > 0 ? 0xff4444 : hex);
+        if (game.player.hp <= 0) return;
+        if (skill.type === 'dash') {
+          const dx = game.player.position.x - this.position.x;
+          const dz = game.player.position.z - this.position.z;
+          const length = Math.hypot(dx, dz) || 1;
+          game.player.knockVelocity.x += (dx / length) * 4;
+          game.player.knockVelocity.y = Math.max(game.player.knockVelocity.y, 2);
+          game.player.knockVelocity.z += (dz / length) * 4;
+        }
+        game.player.hp = Math.max(0, game.player.hp - skill.damage);
+        this._skillCooldowns[index] = performance.now() + skill.cooldown * 1000;
+        game._updateHpHud();
+        if (game.player.hp <= 0) {
+          game._lastDamageBy = `creature:${this.customCreature.name}`;
+          game._showDeathScreen();
+        }
+      });
+    }
     let short = ((this.targetRotation - this.rotation + Math.PI) % (Math.PI * 2)) - Math.PI;
     this.rotation += short * Math.min(this.turnSpeed * dt, 1);
     this.group.rotation.y = this.rotation;
@@ -374,6 +449,7 @@ class Critter {
       id: this.id, kind: this.kind,
       x: +this.position.x.toFixed(2), y: +this.position.y.toFixed(2), z: +this.position.z.toFixed(2),
       yaw: +this.rotation.toFixed(3), hp: this.hp, maxHp: this.maxHp, state: this.state,
+      ...(this.customCreature ? { creature: this.customCreature } : {}),
     };
   }
 
@@ -425,11 +501,20 @@ export class AnimalManager {
 
   /** 管理：在指定坐标刷一只 */
   spawnOne(kind, x, y, z, opts = {}) {
-    const k = CritterDefs[kind] ? kind : 'pig';
+    const custom = kind === 'custom' && opts.creature
+      ? normalizeCreatureBlueprint(opts.creature)
+      : null;
+    const k = custom?.ok ? 'custom' : (CritterDefs[kind] ? kind : 'pig');
+    if (k === 'custom' && this.robots.filter(robot => robot.customCreature).length >= CREATURE_LIMITS.roomCreatures) return null;
+    if (k === 'custom') opts = { ...opts, creature: custom.value };
     const bot = new Critter(this.scene, this.world, k, x, y, z, opts);
     this.robots.push(bot);
     this._spawned = true;
     return bot;
+  }
+
+  spawnCustom(creature, x, y, z) {
+    return this.spawnOne('custom', x, y, z, { creature });
   }
 
   clearNear(x, z, radius = 32) {
@@ -481,12 +566,12 @@ export class AnimalManager {
       let bot = this.robots.find((r) => r.id === m.id);
       if (!bot) {
         bot = new Critter(this.scene, this.world, m.kind || 'pig', m.x, m.y, m.z, {
-          id: m.id, hp: m.hp, maxHp: m.maxHp, netDriven: true,
+          id: m.id, hp: m.hp, maxHp: m.maxHp, netDriven: true, creature: m.creature,
         });
         this.robots.push(bot);
       }
       bot._netDriven = true;
-      bot.applyNetPose(m.x, m.y, m.z, m.yaw, m.hp, m.state);
+      bot.applyNetPose(m.x, m.y, m.z, m.yaw, m.hp, m.state, m.shielded);
     }
   }
 
@@ -495,11 +580,11 @@ export class AnimalManager {
     let bot = this.robots.find((r) => r.id === m.id);
     if (!bot) {
       bot = new Critter(this.scene, this.world, m.kind || 'pig', m.x, m.y, m.z, {
-        id: m.id, hp: m.hp, maxHp: m.maxHp, netDriven: true,
+        id: m.id, hp: m.hp, maxHp: m.maxHp, netDriven: true, creature: m.creature,
       });
       this.robots.push(bot);
     }
-    bot.applyNetPose(m.x, m.y, m.z, m.yaw, m.hp, m.state);
+    bot.applyNetPose(m.x, m.y, m.z, m.yaw, m.hp, m.state, m.shielded);
     if (m.hurt) bot.hurtTimer = 0.35;
   }
 
@@ -521,7 +606,7 @@ export class AnimalManager {
 
   update(dt, camera = null) {
     for (const r of this.robots) {
-      r.update(dt, this.spawnCenter);
+      r.update(dt, this.spawnCenter, camera, this.game);
       r.updateLabel?.(camera);
     }
   }

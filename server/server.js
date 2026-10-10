@@ -16,6 +16,7 @@ const fs = require('fs');
 const path = require('path');
 const { WebSocketServer } = require('ws');
 const { URL } = require('url');
+const { CreatureCatalog } = require('./creature-catalog.cjs');
 
 async function main() {
 const { RoomBoss, CollisionWorld } = await import('./room-boss.mjs');
@@ -34,6 +35,7 @@ const { getFoodHeal } = await import('../js/items.js');
 const { buildMobDrops } = await import('../js/loot.js');
 const { findStandY } = await import('../js/nav-grid.js');
 const { createBrain, tickBrain, forceFlee } = await import('../js/mob-brain.js');
+const { normalizeCreatureBlueprint, creatureCollisionBounds, CREATURE_LIMITS } = await import('../js/creature-blueprint.js');
 const PORT = Number(process.env.PORT || 3040);
 const HOST = process.env.HOST || '127.0.0.1';
 const OWNER_KEY = process.env.MC_OWNER_KEY || 'aikex-mc-2026';
@@ -50,6 +52,12 @@ const DATA_DIR = process.env.MC_DATA_DIR || path.join(__dirname, 'data');
 const PERSIST_PATH = path.join(DATA_DIR, 'rooms.json');
 const ADMINS_PATH = path.join(DATA_DIR, 'admins.json');
 const CATALOG_PATH = path.join(DATA_DIR, 'catalog.json');
+const CREATURE_CATALOG_PATH = path.join(DATA_DIR, 'creature-templates.json');
+const creatureCatalog = new CreatureCatalog(
+  CREATURE_CATALOG_PATH,
+  normalizeCreatureBlueprint,
+  CREATURE_LIMITS.templates,
+);
 const ADMIN_LOG_PATH = path.join(DATA_DIR, 'admin.log');
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const COLORS = [0xe57373, 0x64b5f6, 0x81c784, 0xffb74d, 0xba68c8, 0x4dd0e1, 0xfff176, 0xf06292];
@@ -66,14 +74,36 @@ function genId() {
 
 function cors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 }
 
 function json(res, code, obj) {
   cors(res);
   res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(obj));
+}
+
+function readJsonBody(req, limit = CREATURE_LIMITS.bytes * 2) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    let tooLarge = false;
+    const chunks = [];
+    req.on('data', chunk => {
+      size += chunk.length;
+      if (size > limit && !tooLarge) {
+        tooLarge = true;
+        reject(Object.assign(new Error('请求内容超过大小限制'), { status: 413 }));
+      }
+      if (!tooLarge) chunks.push(chunk);
+    });
+    req.on('end', () => {
+      if (tooLarge) return;
+      try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); }
+      catch { reject(Object.assign(new Error('请求 JSON 格式无效'), { status: 400 })); }
+    });
+    req.on('error', error => { if (!tooLarge) reject(error); });
+  });
 }
 
 /** @type {Map<string, Room>} */
@@ -86,22 +116,26 @@ function nextMobId() {
 }
 
 class Mob {
-  constructor(kind, x, y, z) {
+  constructor(kind, x, y, z, creature = null) {
     this.id = nextMobId();
     this.kind = kind;
+    this.creature = creature;
     this.x = x;
     this.y = y;
     this.z = z;
     this.yaw = Math.random() * Math.PI * 2;
     const HP = { pig:8,cow:12,chicken:4,duck:5,deer:10,horse:16,donkey:14,scout:10,heavy:20,dragon:200 };
     const SPD = { pig:1.3,cow:1.0,chicken:1.6,duck:1.4,deer:2.0,horse:2.2,donkey:1.8,scout:1.5,heavy:0.8 };
-    this.maxHp = HP[kind] || 8;
+    this.maxHp = creature?.hp || HP[kind] || 8;
     this.hp = this.maxHp;
-    this.speed = SPD[kind] != null ? SPD[kind] : 1.2;
+    this.speed = creature?.speed || (SPD[kind] != null ? SPD[kind] : 1.2);
     this.alive = true;
     this.state = 'idle';
-    this.width = { pig:.8,cow:.95,chicken:.45,duck:.5,deer:.7,horse:.9,donkey:.85,scout:.7,heavy:.9,dragon:1.2 }[kind] || .8;
-    this.height = { pig:.85,cow:1.15,chicken:.55,duck:.55,deer:1.2,horse:1.4,donkey:1.25,scout:1,heavy:1.2,dragon:2 }[kind] || 1;
+    const bounds = creature ? creatureCollisionBounds(creature) : null;
+    this.width = bounds?.width || ({ pig:.8,cow:.95,chicken:.45,duck:.5,deer:.7,horse:.9,donkey:.85,scout:.7,heavy:.9,dragon:1.2 }[kind] || .8);
+    this.height = bounds?.height || ({ pig:.85,cow:1.15,chicken:.55,duck:.55,deer:1.2,horse:1.4,donkey:1.25,scout:1,heavy:1.2,dragon:2 }[kind] || 1);
+    this.skillCooldowns = [];
+    this.shieldUntil = 0;
     this._brain = createBrain(Math.random());
     this._navOpts = { halfW: this.width * 0.4, bodyH: Math.max(1, Math.ceil(this.height)) };
   }
@@ -111,16 +145,42 @@ class Mob {
       id: this.id, kind: this.kind,
       x: +this.x.toFixed(2), y: +this.y.toFixed(2), z: +this.z.toFixed(2),
       yaw: +this.yaw.toFixed(3), hp: this.hp, maxHp: this.maxHp, state: this.state,
+      ...(this.creature ? { creature: this.creature, shielded: this.shieldUntil > Date.now() } : {}),
     };
   }
 
-  tick(dt, world) {
+  tick(dt, world, peers = []) {
     if (!this.alive || !world) return;
+    let chaseTarget = null;
+    let fleeFrom = null;
+    if (this.creature?.behavior === 'aggressive') {
+      let bestDistance = 18;
+      for (const peer of peers) {
+        if (!peer.active || peer.hp <= 0 || peer.dimension !== 'overworld') continue;
+        const distance = Math.hypot(peer.x - this.x, peer.z - this.z);
+        if (distance < bestDistance) { bestDistance = distance; chaseTarget = peer; }
+      }
+      if (!chaseTarget && this._brain.state === 'chase') {
+        this._brain.state = 'wander';
+        this._brain.stateTimer = 1;
+        this._brain.path = [];
+        this._brain.goal = null;
+      }
+    } else if (this.creature?.behavior === 'shy') {
+      let nearest = 8;
+      for (const peer of peers) {
+        if (!peer.active || peer.hp <= 0 || peer.dimension !== 'overworld') continue;
+        const distance = Math.hypot(peer.x - this.x, peer.z - this.z);
+        if (distance < nearest) { nearest = distance; fleeFrom = peer; }
+      }
+    }
     const out = tickBrain(this._brain, this, {
       dt,
       world,
       leash: { x: 5.4, z: 22.6, r: 28 },
       navOpts: this._navOpts,
+      chaseTarget,
+      fleeFrom,
     });
     this.x = out.x;
     this.y = out.y;
@@ -180,7 +240,8 @@ class Room {
   hitMob(id, dmg, byId) {
     const m = this.mobs.get(id);
     if (!m || !m.alive) return null;
-    m.hp -= Math.max(1, Math.min(10, dmg | 0 || 3));
+    const boundedDamage = Math.max(1, Math.min(10, dmg | 0 || 3));
+    m.hp -= m.shieldUntil > Date.now() ? Math.max(1, Math.ceil(boundedDamage / 2)) : boundedDamage;
     let attacker = null;
     if (byId) {
       for (const p of this.peers.values()) {
@@ -204,7 +265,66 @@ class Room {
   }
 
   tickMobs(dt) {
-    for (const m of this.mobs.values()) m.tick(dt, this.collision);
+    const now = Date.now();
+    const peers = [...this.peers.values()];
+    for (const m of this.mobs.values()) {
+      m.tick(dt, this.collision, peers);
+      if (!m.creature) continue;
+      let target = null;
+      let distance = Infinity;
+      for (const peer of peers) {
+        if (!peer.active || peer.hp <= 0 || peer.dimension !== 'overworld') continue;
+        const d = Math.hypot(peer.x - m.x, peer.z - m.z);
+        if (d < distance) { target = peer; distance = d; }
+      }
+      if (!target) continue;
+      m.creature.skills.forEach((skill, index) => {
+        if (skill.type === 'shield') {
+          if (distance <= skill.range && now >= (m.skillCooldowns[index] || 0)) {
+            m.shieldUntil = now + 1000;
+            m.skillCooldowns[index] = now + skill.cooldown * 1000;
+          }
+          return;
+        }
+        if (distance > skill.range || now < (m.skillCooldowns[index] || 0)) return;
+        if (!combat.hurt(target, skill.damage, now)) return;
+        m.skillCooldowns[index] = now + skill.cooldown * 1000;
+        const impact = skill.type === 'dash' ? {
+          kx: +((target.x - m.x) / Math.max(distance, 0.01) * 4).toFixed(2),
+          ky: 2,
+          kz: +((target.z - m.z) / Math.max(distance, 0.01) * 4).toFixed(2),
+        } : {};
+        this.broadcast({ t: 'combat', ...combat.state(target), cause: `creature:${m.creature.name}`, ...impact });
+      });
+    }
+  }
+
+  deployCreature(templateId, peer, x, z) {
+    const template = creatureCatalog.get(templateId);
+    if (!template) return { error: '生物模板不存在' };
+    if (!peer.active || peer.hp <= 0) return { error: '进入游戏并存活后才能部署生物' };
+    if (peer.dimension !== 'overworld') return { error: '自定义生物目前只能部署在主世界' };
+    if (![x, z].every(Number.isFinite) || Math.hypot(x - peer.x, z - peer.z) > 8) {
+      return { error: '部署位置超出安全范围' };
+    }
+    const deployed = [...this.mobs.values()].filter(mob => mob.creature).length;
+    if (deployed >= CREATURE_LIMITS.roomCreatures) return { error: '房间自定义生物已达 12 只上限' };
+    const y = findStandY(this.collision, x, z, peer.y, {
+      halfW: creatureCollisionBounds(template.blueprint).width * 0.4,
+      bodyH: Math.max(1, Math.ceil(creatureCollisionBounds(template.blueprint).height)),
+      lookUp: 8,
+      lookDown: 12,
+    });
+    if (y === null) return { error: '此处没有安全的地面位置' };
+    if ([...this.mobs.values()].some(mob =>
+      Math.hypot(mob.x - x, mob.z - z) < (mob.width + template.blueprint.body.width) * 0.5 + 0.2
+    )) {
+      return { error: '部署位置太靠近另一只生物' };
+    }
+    const mob = new Mob('custom', x, y, z, template.blueprint);
+    this.mobs.set(mob.id, mob);
+    this.touch();
+    return { mob: mob.toJSON() };
   }
 
   touch() {
@@ -558,6 +678,53 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (pathname === '/api/creatures') {
+    if (req.method === 'GET') {
+      json(res, 200, { ok: true, templates: creatureCatalog.list() });
+      return;
+    }
+    if (req.method === 'POST') {
+      readJsonBody(req).then(input => {
+        const result = creatureCatalog.create(input);
+        if (result.error) {
+          json(res, 400, { ok: false, error: result.error });
+          return;
+        }
+        json(res, 201, { ok: true, template: result.template, token: result.token });
+      }).catch(error => json(res, error.status || 500, { ok: false, error: error.message }));
+      return;
+    }
+    json(res, 405, { ok: false, error: '此模板目录操作不受支持' });
+    return;
+  }
+
+  const creatureMatch = pathname.match(/^\/api\/creatures\/([a-f0-9-]{36})$/i);
+  if (creatureMatch) {
+    const id = creatureMatch[1];
+    if (req.method === 'GET') {
+      const template = creatureCatalog.get(id);
+      json(res, template ? 200 : 404, template ? { ok: true, template } : { ok: false, error: '模板不存在' });
+      return;
+    }
+    const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    if (req.method === 'PATCH') {
+      readJsonBody(req).then(input => {
+        const result = creatureCatalog.update(id, token, input);
+        json(res, result.error ? (result.status || 400) : 200, result.error
+          ? { ok: false, error: result.error }
+          : { ok: true, template: result.template });
+      }).catch(error => json(res, error.status || 500, { ok: false, error: error.message }));
+      return;
+    }
+    if (req.method === 'DELETE') {
+      const result = creatureCatalog.delete(id, token);
+      json(res, result.error ? (result.status || 400) : 200, result);
+      return;
+    }
+    json(res, 405, { ok: false, error: '此模板操作不受支持' });
+    return;
+  }
+
   if (pathname === '/api/catalog') {
     json(res, 200, loadCatalog());
     return;
@@ -836,7 +1003,23 @@ wss.on('connection', (ws) => {
       send(ws, room.snapshotFor(ws));
       return;
     }
+    if (msg.t === 'creature_spawn') {
+      const x = peer.x - Math.sin(peer.yaw) * 2.4;
+      const z = peer.z - Math.cos(peer.yaw) * 2.4;
+      const result = room.deployCreature(String(msg.templateId || ''), peer, x, z);
+      if (result.error) {
+        send(ws, { t: 'err', msg: result.error });
+        return;
+      }
+      room.broadcast({ t: 'creature_spawned', id: result.mob.id, name: result.mob.creature.name, by: peer.id });
+      room.broadcast({ t: 'mobs', list: room.mobsArray() });
+      return;
+    }
 
+    if (msg.t === 'pause') {
+      peer.active = false;
+      return;
+    }
     if (msg.t === 'play') {
       peer.active = true;
       send(ws, {t:'vitals',hp:peer.hp});
@@ -934,7 +1117,7 @@ wss.on('connection', (ws) => {
       const result = room.hitMob(String(msg.id || ''), msg.dmg | 0 || 3, peer.id);
       if (!result) return;
       if (result.die) {
-        const drops = buildMobDrops(result.mob.kind);
+        const drops = result.mob.kind === 'custom' ? [] : buildMobDrops(result.mob.kind);
         room.broadcast({
           t: 'mob_die',
           id: result.mob.id,
@@ -1079,6 +1262,9 @@ process.on('SIGINT' , () => { persistNow(); process.exit(0); });
 process.on('SIGTERM', () => { persistNow(); process.exit(0); });
 
 server.listen(PORT, HOST, () => {
+  if (process.env.MC_SERVE_STATIC === '1') {
+    console.log(`[mc] 游戏页面 http://${HOST}:${PORT}/`);
+  }
   console.log(`[mc-ws] http://${HOST}:${PORT}/api/rooms  ws://${HOST}:${PORT}/ws`);
   console.log(`[mc-ws] persist → ${PERSIST_PATH}`);
 });

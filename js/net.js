@@ -96,7 +96,7 @@ export class NetClient {
       this._emit('sync', msg);
       return;
     }
-    if (['boss','vitals','respawned','combat','shot','fireball','fire','chat','nuke','nuke_projectile','nuke_granted','terrain_reset','host','blink_fail','admin_effect'].includes(msg.t)) this._emit(msg.t, msg);
+    if (['boss','vitals','respawned','combat','shot','fireball','fire','chat','nuke','nuke_projectile','nuke_granted','terrain_reset','host','blink_fail','admin_effect','creature_spawned'].includes(msg.t)) this._emit(msg.t, msg);
     else if (msg.t === 'block') this._emit('block', msg);
     else if (msg.t === 'move') this._emit('move', msg);
     else if (msg.t === 'peer') this._emit('peer', msg);
@@ -132,6 +132,9 @@ export class NetClient {
 
   sendChat(text){if(this.room)this._send({t:'chat',text});}
   sendTerrainReset(){if(this.room)this._send({t:'terrain_reset'});}
+  sendPause(){if(this.room)this._send({t:'pause'});}
+  sendPlay(){if(this.room)this._send({t:'play'});}
+  sendCreatureSpawn(templateId){if(this.room)this._send({t:'creature_spawn',templateId});}
 
   sendHit(id, dmg = 3) {
     if (!this.room) return;

@@ -6,6 +6,8 @@ server/data/admins.json
 server/data/admin.log
 server/data/rooms.json
 server/data/rooms.json.tmp
+server/data/creature-templates.json
+server/data/creature-templates.json.tmp
 server/ecosystem.config.cjs
 .env
 .env.*

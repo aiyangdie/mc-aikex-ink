@@ -10,9 +10,9 @@ import {
   CHUNK_SIZE, CHUNK_HEIGHT, RENDER_DISTANCE, getBlockColor, getBreakDrop,
   isMobileDevice, getRenderDistance,
 } from './voxel.js?v=groundfix9';
-import { AnimalManager } from './animals.js?v=groundfix9';
+import { AnimalManager } from './animals.js?v=creaturelab1';
 import { SaveManager } from './save.js?v=groundfix9';
-import { NetClient, RemotePlayers } from './net.js?v=groundfix9';
+import { NetClient, RemotePlayers } from './net.js?v=creaturelab1';
 import { Inventory } from './inventory.js?v=groundfix9';
 import { isFood, isItem, getItemName, getItemColor, getFoodHeal, ItemType } from './items.js?v=groundfix9';
 import { BombManager, isBomb } from './bombs.js?v=groundfix9';
@@ -29,6 +29,7 @@ import { RoomChat } from './room-chat.js';
 import { mouseLookDelta } from './mouse-look.js';
 import { findStandY } from './boss-navigation.js';
 import { SimDebug } from './sim-debug.js';
+import { CreatureEditor } from './creature-editor.js';
 
 /* ============================================
    玩家类 - 第一人称角色控制
@@ -787,6 +788,7 @@ export class Game {
     this._terrainRevision = 0;
     this._roomHostId = null;
     this._chatOpen = false;
+    this._creatureLabOpen = false;
     this.nukeUnlocked = false;
     this.nukeEquipped = false;
     this.nukeCooldownUntil = 0;
@@ -831,6 +833,7 @@ export class Game {
     this._bindNet();
     this._initOnlineUI();
     this.roomChat=new RoomChat({onSend:text=>this.net.sendChat(text),onReset:()=>this._confirmTerrainReset(),onClose:()=>{this._chatOpen=false;this._lastMousePoint=null;}});
+    this.creatureEditor = new CreatureEditor(this);
 
     this.adminPanel = new AdminPanel(this);
     this.adminPanel.tryAutoLogin();
@@ -1067,6 +1070,7 @@ export class Game {
 
     // 初始化机器人生成管理器
     this.animalManager = new AnimalManager(this.scene, this.world, this.isMobile);
+    this.animalManager.game = this;
     this.simDebug = new SimDebug(this.scene);
     this._simDebugOn = false;
     this.bombs = new BombManager(this);
@@ -1208,6 +1212,7 @@ export class Game {
     if (this.combat) this.combat.held = false;
     this.ui.pauseScreen.style.display = 'flex';
     this._showGameUI(false);
+    if (this._online) this.net.sendPause();
     this._persist('auto');
   }
 
@@ -1275,9 +1280,14 @@ export class Game {
   _initEvents() {
     // 键盘事件（桌面端 + 移动端外接键盘通用）
     document.addEventListener('keydown', (e) => {
+      if (this._creatureLabOpen) {
+        if (e.code === 'Escape') { e.preventDefault(); this.creatureEditor?.close(); }
+        return;
+      }
       if(this._chatOpen){if(e.code==='Escape'){e.preventDefault();this._closeChat();}return;}
       if (this._dead) return;
       if (/INPUT|TEXTAREA|SELECT/.test(e.target.tagName) || e.target.isContentEditable) return;
+      if (e.code === 'KeyY' && !e.repeat && this.isRunning) { e.preventDefault(); this.creatureEditor?.open(); return; }
       if(e.code==='KeyT'&&this._online&&this.isRunning){e.preventDefault();this._openChat();return;}
       if (e.code === 'Escape' && this._fallbackActive) { this._pauseFallback(); return; }
       if (!this._controlsActive()) return;
@@ -1316,6 +1326,7 @@ export class Game {
       if (e.code === 'Escape' && this.isRunning) {
         if (this.isMobile) {
           this.isRunning = false;
+          if (this._online) this.net.sendPause();
           this.ui.pauseScreen.style.display = 'flex';
           this._showGameUI(false);
           this._persist('auto');
@@ -1385,10 +1396,12 @@ export class Game {
         if (this.isPointerLocked) {
           this._lockPending = false;
           this._fallbackActive = false;
+          if (this._online) this.net.sendPlay();
           this.ui.pauseScreen.style.display = 'none';
           this._showGameUI(true);
-        } else if (this.isRunning && !this._chatOpen) {
+        } else if (this.isRunning && !this._chatOpen && !this._creatureLabOpen) {
           this.player.keys = {};
+          if (this._online) this.net.sendPause();
           this.ui.pauseScreen.style.display = 'flex';
           this._persist('auto'); // 暂停时自动存
         }
@@ -1399,6 +1412,7 @@ export class Game {
         this._lockPending = false;
         this._pointerFallback = true;
         this._fallbackActive = true;
+        if (this._online) this.net.sendPlay();
         this.ui.pauseScreen.style.display = 'none';
         this._showGameUI(true);
       };
@@ -1429,6 +1443,7 @@ export class Game {
       this.ui.pauseScreen.addEventListener('click', (e) => {
         if (e.target.closest('button')) return;
         this.isRunning = true;
+        if (this._online) this.net.sendPlay();
         this.ui.pauseScreen.style.display = 'none';
         this._showGameUI(true);
       });
@@ -1501,6 +1516,7 @@ export class Game {
       this._attackMob(this.player.targetMob);
       return;
     }
+
     const broken = this.player.breakBlock();
     if (broken && broken !== true) {
       const drop = getBreakDrop(broken);
@@ -1511,6 +1527,26 @@ export class Game {
       }
       this._dirtySinceSave = true;
     }
+  }
+
+  findCreaturePlacement() {
+    if (!this.player || !this.world) return null;
+    const forwardX = -Math.sin(this.player.yaw);
+    const forwardZ = -Math.cos(this.player.yaw);
+    const anchors = [
+      [2.4, 0, 0], [2.8, 1, 0], [2.8, -1, 0], [3.5, 0, 1], [3.5, 0, -1],
+    ];
+    for (const [distance, offsetX, offsetZ] of anchors) {
+      const x = this.player.position.x + forwardX * distance + offsetX;
+      const z = this.player.position.z + forwardZ * distance + offsetZ;
+      const y = findStandY(this.world, x, z, this.player.position.y);
+      if (y === null) continue;
+      const occupied = this.animalManager.animals.some(animal =>
+        Math.hypot(animal.position.x - x, animal.position.z - z) < animal.collisionWidth * 0.5 + 0.65
+      );
+      if (!occupied) return { x, y, z };
+    }
+    return null;
   }
 
   /** 右键：食物则吃；炸弹投放；否则放置 */
@@ -1956,8 +1992,10 @@ export class Game {
     this.player.velocity.set(0,0,0);
     this.ui.pauseScreen.style.display = 'none';
     this._showGameUI(false);
-    document.getElementById('deathReason').textContent = this._lastDamageBy === 'mist-boss'
-      ? '你被迷雾档案的主人公击败了' : this._lastDamageBy === 'nuke' ? '你被核弹击中了' : '生命值已耗尽';
+    const damageSource = typeof this._lastDamageBy === 'string' ? this._lastDamageBy : '';
+    document.getElementById('deathReason').textContent = damageSource === 'mist-boss'
+      ? '你被迷雾档案的主人公击败了' : damageSource === 'nuke' ? '你被核弹击中了'
+        : damageSource.startsWith('creature:') ? `你被${damageSource.slice(9)}击败了` : '生命值已耗尽';
     document.getElementById('deathScreen').hidden = false;
     if (document.pointerLockElement) document.exitPointerLock();
     this.isPointerLocked = false;
@@ -2132,6 +2170,7 @@ export class Game {
     const btnNewGame = document.getElementById('btnNewGame');
     const btnResume = document.getElementById('btnResume');
     const btnSave = document.getElementById('btnSave');
+    document.getElementById('btnCreatureLabPause')?.addEventListener('click', () => this.creatureEditor?.open());
 
     const beginPlay = () => {
       this._stopRoomPoll();
@@ -2200,6 +2239,7 @@ export class Game {
         e.stopPropagation();
         if (this.isMobile) {
           this.isRunning = true;
+          if (this._online) this.net.sendPlay();
           this.ui.pauseScreen.style.display = 'none';
           this._showGameUI(true);
         } else if (this._requestLock) {
@@ -2312,6 +2352,10 @@ export class Game {
     this.net.on('combat', msg => {
       this.combat?.receive(msg);
       if(msg.id===this.net.id&&msg.hp<=0&&msg.cause==='nuke'){this._lastDamageBy='nuke';this._showDeathScreen();}
+      if (msg.id === this.net.id && msg.hp <= 0 && msg.cause?.startsWith('creature:')) {
+        this._lastDamageBy = msg.cause;
+        this._showDeathScreen();
+      }
     });
     this.net.on('shot', msg => this.combat?.trace(msg));
     this.net.on('boss', msg => this._syncOnlineBoss(msg.boss));
@@ -2414,6 +2458,7 @@ export class Game {
       }
     });
     this.net.on('err', (msg) => {
+      if (this._creatureLabOpen) this.creatureEditor?.setStatus(msg);
       if(this.nukeEquipped)this._showSaveToast(msg);
       this._setOnlineStatus(msg, true);
     });
@@ -2431,6 +2476,9 @@ export class Game {
       if (msg.by === this.net.id && Array.isArray(msg.drops)) {
         this._grantLoot(msg.drops, { prey: msg.kind || '' });
       }
+    });
+    this.net.on('creature_spawned', msg => {
+      if (msg.by === this.net.id) this.creatureEditor?.setStatus(`「${msg.name}」已部署到房间。`);
     });
     this.net.on('admin_spawn', (msg) => {
       if (!msg || msg.by === this.net.id) return; // 发起者本地已刷
@@ -3049,6 +3097,8 @@ export class Game {
       const mobileControls = document.getElementById('mobileControls');
       if (mobileControls) mobileControls.style.display = show ? 'block' : 'none';
     }
+    const creatureButton = document.getElementById('btnCreatureLab');
+    if (creatureButton) creatureButton.style.display = show && this.isRunning ? 'block' : 'none';
   }
 
   /** 窗口大小变化处理 */

@@ -1479,3 +1479,108 @@ body.combat-hurt::after {
 #nukeHud button:disabled{opacity:.55;cursor:default}
 #nukeHud button:focus-visible{outline:2px solid #fff;outline-offset:3px}
 @media(max-width:700px){#nukeHud{top:72px;max-width:calc(100vw - 16px);font-size:12px;gap:6px}}
+
+/* 生物标本实验台 */
+#btnCreatureLab {
+  position: fixed;
+  z-index: 70;
+  top: 14px;
+  left: 14px;
+  border: 1px solid rgba(232, 226, 204, .65);
+  padding: 9px 13px;
+  color: #e8e2cc;
+  background: rgba(23, 33, 29, .88);
+  font: 600 12px 'Courier New', monospace;
+  letter-spacing: .04em;
+  cursor: pointer;
+}
+
+#btnCreatureLab:hover { background: #40513a; }
+
+#creatureLab {
+  position: fixed;
+  z-index: 310;
+  inset: 3.2vh 3vw;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  color: #17211d;
+  background: #e8e2cc;
+  border: 1px solid rgba(23, 33, 29, .65);
+  box-shadow: 0 20px 80px rgba(0, 0, 0, .52);
+  font-family: system-ui, sans-serif;
+  user-select: text;
+}
+
+#creatureLab[hidden] { display: none; }
+.creature-lab-head, .creature-lab-foot { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.creature-lab-head { padding: 15px 20px 12px; border-bottom: 1px solid rgba(23, 33, 29, .2); }
+.creature-lab-head h1 { margin: 1px 0 0; font: 500 clamp(20px, 2vw, 27px) Georgia, serif; letter-spacing: -.03em; }
+.lab-kicker, .specimen-caption, .lab-section-title, .specimen-note { font: 10px 'Courier New', monospace; letter-spacing: .09em; text-transform: uppercase; }
+.lab-kicker { color: #64734f; }
+.lab-close { border: 0; background: none; color: #17211d; font-size: 28px; cursor: pointer; }
+.creature-lab-grid { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(190px, .8fr) minmax(260px, 1.3fr) minmax(280px, 1fr); }
+.lab-library, .lab-controls { overflow: auto; padding: 16px; }
+.lab-library { border-right: 1px solid rgba(23, 33, 29, .18); }
+.lab-controls { border-left: 1px solid rgba(23, 33, 29, .18); }
+.lab-section-title { display: flex; align-items: center; justify-content: space-between; margin: 15px 0 8px; color: #526044; }
+.lab-section-title:first-child { margin-top: 0; }
+.lab-section-title span { color: #78805f; font-size: 9px; }
+.lab-section-title button { padding: 3px 7px; border: 1px solid #9ca187; color: #263329; background: transparent; cursor: pointer; }
+.lab-rule { height: 1px; margin: 15px 0; background: rgba(23, 33, 29, .16); }
+.specimen-list, .part-list { display: grid; gap: 5px; }
+.specimen-row { display: grid; grid-template-columns: 9px 1fr; align-items: center; gap: 8px; }
+.specimen-empty { margin: 0; color: #727865; font: 10px/1.6 'Courier New', monospace; }
+.specimen-marker { width: 8px; height: 24px; }
+.specimen-row button, .part-chip, .skill-chip { border: 1px solid transparent; padding: 6px 8px; color: #28352d; text-align: left; background: rgba(255, 255, 255, .36); cursor: pointer; }
+.specimen-row.selected button, .part-chip.active, .skill-chip.active { border-color: #78905b; background: rgba(120, 144, 91, .18); }
+.part-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-bottom: 9px; }
+.part-actions button, .lab-remove, .creature-lab-foot button { border: 1px solid #899274; padding: 7px 9px; color: #27352d; background: transparent; font: 11px 'Courier New', monospace; cursor: pointer; }
+.part-actions button:disabled, .creature-lab-foot button:disabled { opacity: .42; cursor: not-allowed; }
+.part-chip { font-size: 11px; }
+.lab-remove { margin-top: 8px; color: #8b4839; border-color: #b68a77; }
+.lab-specimen { display: flex; flex-direction: column; justify-content: center; min-height: 0; padding: 22px clamp(16px, 3vw, 42px); background: radial-gradient(ellipse at 50% 45%, rgba(120, 144, 91, .19), transparent 65%); }
+.specimen-caption { display: flex; justify-content: space-between; color: #687458; }
+.specimen-view { flex: 1; display: grid; place-items: center; min-height: 220px; }
+.specimen-view svg { width: min(100%, 390px); max-height: 100%; overflow: visible; }
+.specimen-view svg text { fill: #40513a; font: 14px Georgia, serif; }
+.specimen-note { margin: 8px 0 0; color: #737765; font-size: 9px; line-height: 1.5; text-transform: none; letter-spacing: 0; }
+.lab-field { display: grid; gap: 5px; margin: 0 0 12px; color: #526044; font: 10px 'Courier New', monospace; }
+.lab-field input, .lab-field select { width: 100%; min-height: 31px; border: 1px solid #a6aa91; border-radius: 0; padding: 5px 7px; color: #17211d; background: rgba(255, 255, 255, .48); font: 12px system-ui, sans-serif; }
+.lab-field input[type="color"] { padding: 2px; }
+.lab-field input[type="range"] { padding: 0; accent-color: #78905b; }
+.lab-field input:disabled { opacity: .45; }
+.lab-field-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.lab-field-row:first-of-type { grid-template-columns: 1fr 1fr; }
+.lab-field output { justify-self: end; }
+.skill-list { display: flex; flex-wrap: wrap; gap: 5px; }
+.skill-chip { font: 10px 'Courier New', monospace; }
+.creature-lab-foot { min-height: 56px; padding: 9px 16px; border-top: 1px solid rgba(23, 33, 29, .2); }
+.creature-lab-foot p { margin: 0; color: #58644a; font: 10px 'Courier New', monospace; }
+.creature-lab-foot > div { display: flex; flex-wrap: wrap; gap: 7px; }
+.creature-lab-foot .lab-primary { color: #e8e2cc; border-color: #344433; background: #344433; }
+.creature-lab-foot .lab-danger { color: #8b4839; border-color: #b68a77; }
+#creatureLab button:focus-visible, #creatureLab input:focus-visible, #creatureLab select:focus-visible, #btnCreatureLab:focus-visible { outline: 2px solid #9a7729; outline-offset: 2px; }
+
+@media (max-width: 900px) {
+  #creatureLab { inset: 1vh 1vw; }
+  .creature-lab-grid { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(190px, .8fr) minmax(160px, .75fr) minmax(250px, 1.1fr); overflow: auto; }
+  .lab-specimen { grid-row: 1; min-height: 190px; padding: 10px 18px; }
+  .specimen-view { min-height: 125px; }
+  .specimen-view svg { width: min(100%, 260px); }
+  .lab-library { grid-row: 2; border-right: 0; border-bottom: 1px solid rgba(23, 33, 29, .18); }
+  .lab-controls { grid-row: 3; border-left: 0; }
+  .specimen-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .creature-lab-foot { align-items: flex-start; flex-direction: column; }
+}
+
+@media (max-width: 480px) {
+  .creature-lab-head { padding: 10px 13px; }
+  .lab-library, .lab-controls { padding: 12px; }
+  .creature-lab-foot > div { width: 100%; }
+  .creature-lab-foot button { flex: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #creatureLab *, #btnCreatureLab { scroll-behavior: auto !important; transition: none !important; }
+}

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <meta name="description" content="像素方块世界 - 单机存档 / 真实联机房间" />
   <title>像素方块世界</title>
-  <link rel="stylesheet" href="styles/main.css?v=groundfix9" />
+  <link rel="stylesheet" href="styles/main.css?v=creaturelab1" />
   <script type="importmap">
   {
     "imports": {
@@ -18,6 +18,78 @@
 <body>
   <canvas id="gameCanvas"></canvas>
   <div id="nukeFlash" aria-hidden="true"></div>
+  <button id="btnCreatureLab" type="button" aria-label="打开生物实验室" style="display:none">生物实验室</button>
+  <section id="creatureLab" hidden aria-label="生物基因实验室">
+    <header class="creature-lab-head">
+      <div><span class="lab-kicker">FIELD SPECIMEN / 01</span><h1>形态实验台</h1></div>
+      <button class="lab-close" type="button" data-action="close" aria-label="关闭实验室">×</button>
+    </header>
+    <div class="creature-lab-grid">
+      <aside class="lab-library" aria-label="模板与部件">
+        <div class="lab-section-title"><span>共享标本</span><button type="button" data-action="new">新建</button></div>
+        <div class="specimen-list" data-template-list aria-live="polite"></div>
+        <div class="lab-rule"></div>
+        <div class="lab-section-title">部件架 <span>最多 16 件</span></div>
+        <div class="part-actions">
+          <button type="button" data-action="add-part" data-part="body">＋ 躯干</button>
+          <button type="button" data-action="add-part" data-part="head">＋ 头部</button>
+          <button type="button" data-action="add-part" data-part="leg">＋ 肢体</button>
+          <button type="button" data-action="add-part" data-part="tail">＋ 尾部</button>
+          <button type="button" data-action="add-part" data-part="horn">＋ 角冠</button>
+        </div>
+        <div class="part-list" data-part-list></div>
+        <button class="lab-remove" type="button" data-action="remove-part">移除选中部件</button>
+      </aside>
+      <main class="lab-specimen">
+        <div class="specimen-caption"><span>LIVE FORM</span><span>基因脊柱 · 部件映射</span></div>
+        <div class="specimen-view" data-creature-preview></div>
+        <p class="specimen-note">选中部件后调整坐标与比例。保存的模板可由所有玩家部署。</p>
+      </main>
+      <aside class="lab-controls" aria-label="形态和行为参数">
+        <label class="lab-field">标本名称<input name="creature-name" maxlength="24" value="苔原漫游者" /></label>
+        <div class="lab-field-row">
+          <label class="lab-field">主色<input name="color" type="color" value="#78905B" /></label>
+          <label class="lab-field">生命值<input name="hp" type="number" min="1" max="100" step="1" value="12" /></label>
+        </div>
+        <label class="lab-field">移动速度 <output>慢 ↔ 快</output><input name="speed" type="range" min="0.2" max="4" step="0.1" value="1.2" /></label>
+        <div class="lab-section-title">身体比例</div>
+        <div class="lab-field-row">
+          <label class="lab-field">宽<input name="body-width" type="number" min="0.35" max="2.5" step="0.05" value="0.9" /></label>
+          <label class="lab-field">高<input name="body-height" type="number" min="0.35" max="2.5" step="0.05" value="1.1" /></label>
+          <label class="lab-field">深<input name="body-depth" type="number" min="0.35" max="2.5" step="0.05" value="0.7" /></label>
+        </div>
+        <div class="lab-section-title">选中部件 · 位置 / 尺寸</div>
+        <div class="lab-field-row">
+          <label class="lab-field">X<input name="part-x" type="number" min="-1.5" max="1.5" step="0.05" /></label>
+          <label class="lab-field">Y<input name="part-y" type="number" min="-1.5" max="1.5" step="0.05" /></label>
+          <label class="lab-field">Z<input name="part-z" type="number" min="-1.5" max="1.5" step="0.05" /></label>
+        </div>
+        <label class="lab-field">部件颜色<input name="part-color" type="color" /></label>
+        <div class="lab-field-row">
+          <label class="lab-field">宽<input name="part-width" type="number" min="0.08" max="2" step="0.05" /></label>
+          <label class="lab-field">高<input name="part-height" type="number" min="0.08" max="2" step="0.05" /></label>
+          <label class="lab-field">深<input name="part-depth" type="number" min="0.08" max="2" step="0.05" /></label>
+        </div>
+        <label class="lab-field">行为<select name="behavior"></select></label>
+        <div class="lab-section-title">能力组件 <span>最多 3 项</span></div>
+        <div class="skill-list" data-skill-list></div>
+        <div class="lab-field-row skill-settings">
+          <label class="lab-field">范围<input name="skill-range" type="number" min="1" max="8" step="0.5" /></label>
+          <label class="lab-field">伤害<input name="skill-damage" type="number" min="1" max="8" step="1" /></label>
+          <label class="lab-field">冷却<input name="skill-cooldown" type="number" min="0.5" max="10" step="0.5" /></label>
+        </div>
+        <button class="lab-remove" type="button" data-action="remove-skill">移除选中能力</button>
+      </aside>
+    </div>
+    <footer class="creature-lab-foot">
+      <p data-status role="status">调整形态与能力，发布到共享目录。</p>
+      <div>
+        <button class="lab-danger" type="button" data-action="delete" hidden>删除模板</button>
+        <button type="button" data-action="save">发布新模板</button>
+        <button class="lab-primary" type="button" data-action="deploy" disabled>部署到世界</button>
+      </div>
+    </footer>
+  </section>
   <div id="crosshair">+</div>
   <div id="selectedBlockName">草地</div>
   <div id="hotbar"></div>
@@ -49,6 +121,7 @@
       <div class="control-row"><span class="key">G</span><span>点燃地狱门</span></div>
       <div class="control-row"><span class="key">C</span><span>木头→木板</span></div>
       <div class="control-row"><span class="key">F</span><span>吃肉回血（先猎杀动物）</span></div>
+      <div class="control-row"><span class="key">Y</span><span>生物实验室</span></div>
       <div class="control-row"><span class="key">猎杀</span><span>掉肉+金币 · 自动选中肉</span></div>
       <div class="control-row"><span class="key">右键+炸弹</span><span>投掷/安放炸弹</span></div>
     </div>
@@ -64,6 +137,7 @@
     <div id="pauseRoomInfo" class="pause-room" style="display:none"></div>
     <div class="pause-actions">
       <button type="button" id="btnResume" class="game-btn primary">继续游戏</button>
+      <button type="button" id="btnCreatureLabPause" class="game-btn">生物实验室</button>
       <button type="button" id="btnSave" class="game-btn">保存进度</button>
     </div>
     <div class="pause-hint">点击空白处继续 · Shift+F5 快捷保存</div>
@@ -187,6 +261,6 @@
     <div id="mobileHotbar"></div>
   </div>
 
-  <script type="module" src="js/game.js?v=groundfix9"></script>
+  <script type="module" src="js/game.js?v=creaturelab1"></script>
 </body>
 </html>
