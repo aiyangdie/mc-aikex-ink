@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/covers/10-mc-aikex-ink.jpg" alt="mc-aikex-ink 项目封面" width="100%"></p>
+
 # 像素方块世界 (mc.aikex.ink)
 
 开源体素沙盒：单机存档、联机房间、地狱/末地、末影龙、管理面板。
